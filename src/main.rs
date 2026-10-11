@@ -16,6 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 mod cleaner;
+mod cli;
 mod config;
 mod detector;
 mod firewall;
@@ -404,13 +405,11 @@ unsafe extern "system" fn window_proc(
     }
 }
 
-fn main() {
+/// Запуск фонового демона в трее Windows.
+fn run_daemon(config: AppConfig) {
     println!("============================================================");
     println!("       GhostClip Shield (GCB) v0.1.0 - Запущен в трее        ");
     println!("============================================================");
-
-    // 1. Загрузка конфигурации
-    let config = AppConfig::load_or_create("config.toml");
     println!("- Конфигурация config.toml успешно загружена.");
 
     unsafe {
@@ -425,7 +424,7 @@ fn main() {
         };
         let _ = RegisterClassW(&wc);
 
-        // 2. Создаем скрытое служебное окно для приема системных сообщений
+        // Создаем скрытое служебное окно для приема системных сообщений
         let hwnd_res = CreateWindowExW(
             windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
             class_name,
@@ -446,7 +445,7 @@ fn main() {
             return;
         };
 
-        // 3. Создаем иконку в системном трее
+        // Создаем иконку в системном трее
         let tray_icon = init_tray_icon(hwnd, TrayState::Green);
         {
             let mut lock = APP_STATE.lock().unwrap();
@@ -458,7 +457,7 @@ fn main() {
         }
         println!("- Иконка активна в системном трее (возле часов).");
 
-        // 4. Регистрируем слушатель системных изменений буфера
+        // Регистрируем слушатель системных изменений буфера
         let listener_res = AddClipboardFormatListener(hwnd);
         if listener_res.is_ok() {
             println!("- Слушатель буфера обмена (WM_CLIPBOARDUPDATE) подключен.");
@@ -466,16 +465,16 @@ fn main() {
             eprintln!("Внимание: Не удалось подключить AddClipboardFormatListener.");
         }
 
-        // 5. Регистрируем PanicFlush хоткей (Ctrl+Shift+Alt+P)
+        // Регистрируем PanicFlush хоткей (Ctrl+Shift+Alt+P)
         if hotkeys::register_panic_hotkey(hwnd) {
             println!("- Хоткей PanicFlush (Ctrl + Shift + Alt + P) активен.");
         }
 
-        // 6. Подключаем хук для распознавания намерения вставки (Intent-Aware Bypass)
+        // Подключаем хук для распознавания намерения вставки (Intent-Aware Bypass)
         hotkeys::install_paste_intent_hook();
         println!("- Защита осознанной вставки (Ctrl + V зеленый коридор) активна.");
 
-        // 7. Таймер обновления состояния трея каждую секунду
+        // Таймер обновления состояния трея каждую секунду
         SetTimer(hwnd, TIMER_STATUS_CHECK, 1000, None);
 
         // Показываем стартовое уведомление в Windows
@@ -486,11 +485,64 @@ fn main() {
             false,
         );
 
-        // 8. Главный цикл обработки сообщений Windows
+        // Главный цикл обработки сообщений Windows
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, HWND(std::ptr::null_mut()), 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
+        }
+    }
+}
+
+/// Вывод текстовой справки по аргументам командной строки.
+fn print_help() {
+    println!("GhostClip Shield (GCB) — Защитник буфера обмена Windows\n");
+    println!("Использование:");
+    println!("  ghostclip                 Запустить интерактивное меню настройки (стрелочки)");
+    println!("  ghostclip --daemon        Запустить защиту сразу в трее без меню (флаг: -d)");
+    println!("  ghostclip --help          Показать эту справку (флаг: -h)\n");
+    println!("Функции:");
+    println!("  • CleanClip URLs          Очистка ссылок от UTM, fbclid, gclid трекеров");
+    println!("  • CleanClip Zero-Width    Удаление невидимых скрытых символов слежки");
+    println!("  • Secrets Detector        Поиск токенов API, JWT, криптокошельков и паролей");
+    println!("  • Bank Card Check         Проверка номеров карт по алгоритму Луна");
+    println!("  • Clipboard Firewall      Брандмауэр от фоновых программ-шпионов");
+    println!("  • Intent-Aware Bypass     Зеленый коридор 500 мс при осознанном Ctrl+V");
+    println!("  • PanicFlush              Экстренный сброс памяти по Ctrl+Shift+Alt+P");
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let mut config = AppConfig::load_or_create("config.toml");
+
+    // Прямой запуск демона по флагу --daemon или -d
+    if args.iter().any(|a| a == "--daemon" || a == "--tray" || a == "-d") {
+        run_daemon(config);
+        return;
+    }
+
+    // Справка по флагу --help или -h
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print_help();
+        return;
+    }
+
+    // По умолчанию открываем интерактивный TUI-дашборд с переключением стрелочками
+    match cli::run_interactive_menu(&mut config) {
+        cli::CliAction::LaunchDaemon => {
+            let _ = config.save("config.toml");
+            println!("\n[GhostClip Shield] Настройки сохранены. Запуск защиты в трее Windows...");
+            run_daemon(config);
+        }
+        cli::CliAction::SaveAndExit => {
+            if let Ok(()) = config.save("config.toml") {
+                println!("\n[GhostClip Shield] ✅ Настройки успешно сохранены в config.toml.");
+            } else {
+                eprintln!("\n[GhostClip Shield] ❌ Ошибка сохранения в config.toml.");
+            }
+        }
+        cli::CliAction::ExitWithoutSaving => {
+            println!("\n[GhostClip Shield] Выход без сохранения изменений.");
         }
     }
 }

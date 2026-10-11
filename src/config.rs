@@ -147,6 +147,13 @@ impl AppConfig {
         }
         default_cfg
     }
+
+    /// Сохраняет текущую конфигурацию в файл (например, после настройки в CLI).
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        fs::write(path, content)
+    }
 }
 
 #[cfg(test)]

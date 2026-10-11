@@ -11,6 +11,7 @@ toml = "0.8"
 
 # Регулярные выражения для детекции токенов и очистки URL
 regex = "1.10"
+crossterm = "0.28"
 
 # Официальные Windows API привязки (Win32 + WinRT)
 [dependencies.windows]
