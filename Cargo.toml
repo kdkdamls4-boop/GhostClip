@@ -1,0 +1,30 @@
+[package]
+name = "ghostclip"
+version = "0.1.0"
+edition = "2024"
+description = "GhostClip Shield (GCB) - Safe, ephemeral and firewall-protected clipboard for Windows"
+
+[dependencies]
+# Сериализация и чтение config.toml
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# Регулярные выражения для детекции токенов и очистки URL
+regex = "1.10"
+
+# Официальные Windows API привязки (Win32 + WinRT)
+[dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Shutdown",
+    "ApplicationModel_DataTransfer",
+]
