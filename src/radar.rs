@@ -13,9 +13,9 @@ pub struct ProcessInfo {
     /// Идентификатор процесса в Windows (PID)
     pub pid: u32,
     /// Имя исполняемого файла (например, "discord.exe" или "chrome.exe")
+    #[allow(dead_code)]
     pub exe_name: String,
     /// Полный путь к файлу на диске
-    #[allow(dead_code)]
     pub full_path: String,
 }
 

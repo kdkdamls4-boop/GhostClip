@@ -47,7 +47,7 @@ pub fn run_interactive_menu(cfg: &mut AppConfig) -> CliAction {
     let _guard = TerminalGuard::new();
 
     let mut selected_index = 0;
-    let total_items = 12;
+    let total_items = 13;
 
     loop {
         render_menu(cfg, selected_index);
@@ -84,8 +84,11 @@ pub fn run_interactive_menu(cfg: &mut AppConfig) -> CliAction {
                 KeyCode::Enter => {
                     match selected_index {
                         9 => return CliAction::LaunchDaemon,
-                        10 => return CliAction::SaveAndExit,
-                        11 => return CliAction::ExitWithoutSaving,
+                        10 => {
+                            crate::audit::open_log_file();
+                        }
+                        11 => return CliAction::SaveAndExit,
+                        12 => return CliAction::ExitWithoutSaving,
                         _ => {
                             // На обычных пунктах Enter переключает значение
                             toggle_or_adjust(cfg, selected_index, true);
@@ -162,10 +165,11 @@ fn render_menu(cfg: &AppConfig, selected: usize) {
     render_custom_row(selected == 8, &ttl_text, Color::Yellow);
 
     println!();
-    // Пункты действий 9, 10, 11
+    // Пункты действий 9, 10, 11, 12
     render_action_row(selected == 9, "🚀  [ СОХРАНИТЬ И ЗАПУСТИТЬ ЗАЩИТУ В ТРЕЕ ]", Color::Green);
-    render_action_row(selected == 10, "💾  [ Сохранить в config.toml и выйти ]", Color::White);
-    render_action_row(selected == 11, "❌  [ Выйти без сохранения ]", Color::Red);
+    render_action_row(selected == 10, "📄  [ Открыть журнал clipboard_access.log ]", Color::Cyan);
+    render_action_row(selected == 11, "💾  [ Сохранить в config.toml и выйти ]", Color::White);
+    render_action_row(selected == 12, "❌  [ Выйти без сохранения ]", Color::Red);
 
     println!("\n");
     // Информационный блок с описанием выбранной функции
@@ -316,6 +320,13 @@ fn render_description_box(selected: usize) {
             ],
         ),
         10 => (
+            "Открыть журнал обращений к буферу",
+            &[
+                "Открывает текстовый файл clipboard_access.log в Блокноте Windows.",
+                "Там фиксируются дата/время, полный путь к файлу программы и что она прочитала.",
+            ],
+        ),
+        11 => (
             "Сохранить и выйти",
             &[
                 "Записывает выбранные настройки в файл config.toml и завершает работу CLI.",

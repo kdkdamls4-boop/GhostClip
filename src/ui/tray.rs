@@ -18,12 +18,14 @@ pub enum TrayState {
     /// 🟡 Желтый призрак: Тикает таймер самоуничтожения секрета
     Yellow,
     /// 🔴 Красный радар: Зафиксирована попытка неавторизованного доступа
+    #[allow(dead_code)]
     Red,
 }
 
 pub const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 101;
 pub const ID_TRAY_PANIC: usize = 2001;
-pub const ID_TRAY_EXIT: usize = 2002;
+pub const ID_TRAY_OPEN_LOG: usize = 2002;
+pub const ID_TRAY_EXIT: usize = 2003;
 
 /// Генерирует в оперативной памяти круглую 16x16 иконку нужного цвета.
 /// Это избавляет программу от внешних зависимостей и необходимости таскать за собой файлы .ico.
@@ -158,9 +160,11 @@ pub fn show_tray_menu(hwnd: HWND) {
         let Ok(menu) = CreatePopupMenu() else { return };
 
         let panic_text: Vec<u16> = "Экстренно очистить буфер (PanicFlush)\0".encode_utf16().collect();
+        let log_text: Vec<u16> = "Открыть лог доступа (clipboard_access.log)\0".encode_utf16().collect();
         let exit_text: Vec<u16> = "Выход из GhostClip Shield\0".encode_utf16().collect();
 
         let _ = AppendMenuW(menu, MF_STRING, ID_TRAY_PANIC, PCWSTR(panic_text.as_ptr()));
+        let _ = AppendMenuW(menu, MF_STRING, ID_TRAY_OPEN_LOG, PCWSTR(log_text.as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(std::ptr::null()));
         let _ = AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, PCWSTR(exit_text.as_ptr()));
 

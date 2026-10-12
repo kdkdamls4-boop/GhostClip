@@ -15,6 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
+mod audit;
 mod cleaner;
 mod cli;
 mod config;
@@ -140,84 +141,7 @@ unsafe extern "system" fn window_proc(
                     lock.as_ref().map(|s| s.config.clone()).unwrap_or_default()
                 };
 
-                // 2. ClipboardRadar & Firewall: проверяем процесс, обратившийся к буферу
-                if cfg.firewall.enabled {
-                    if let Some(accessor) = radar::detect_clipboard_reader() {
-                        let my_pid = std::process::id();
-                        if accessor.pid != my_pid {
-                            match firewall::evaluate_access(&accessor.exe_name, accessor.pid, &cfg.firewall) {
-                                firewall::AccessDecision::Allow => {
-                                    // Доступ разрешен (белый список, активная сессия или ручная вставка Ctrl+V)
-                                }
-                                firewall::AccessDecision::DenyHoneypot(fake_text) => {
-                                    println!("[Firewall] ⛔ Приложение '{}' в черном списке! Подмена на пустышку.", accessor.exe_name);
-                                    let _guard = sentinel::InternalUpdateGuard::new();
-                                    write_clipboard_text(hwnd, fake_text);
-
-                                    if let Ok(mut lock) = APP_STATE.lock() {
-                                        if let Some(state) = lock.as_mut() {
-                                            state.current_state = TrayState::Red;
-                                            let new_icon = update_tray_state(
-                                                hwnd,
-                                                state.tray_icon(),
-                                                TrayState::Red,
-                                                Some(&format!("Заблокирован: {}", accessor.exe_name)),
-                                            );
-                                            state.set_tray_icon(new_icon);
-                                        }
-                                    }
-                                    ui::notify::show_notification(
-                                        hwnd,
-                                        "GhostClip Firewall: Блокировка!",
-                                        &format!("Приложение '{}' заблокировано от чтения буфера.", accessor.exe_name),
-                                        true,
-                                    );
-                                    return LRESULT(0);
-                                }
-                                firewall::AccessDecision::AskUser => {
-                                    let choice = ui::dialog::prompt_firewall_decision(
-                                        &accessor.exe_name,
-                                        accessor.pid,
-                                        cfg.firewall.dialog_timeout_seconds,
-                                    );
-                                    match choice {
-                                        firewall::UserChoice::AlwaysAllow => {
-                                            if let Ok(mut lock) = APP_STATE.lock() {
-                                                if let Some(state) = lock.as_mut() {
-                                                    state.config.firewall.whitelist.push(accessor.exe_name.clone());
-                                                }
-                                            }
-                                        }
-                                        firewall::UserChoice::AllowFor15Min => {
-                                            firewall::grant_timed_access(&accessor.exe_name, std::time::Duration::from_secs(15 * 60));
-                                        }
-                                        firewall::UserChoice::AllowOnce => {
-                                            // Разово пропускаем чтение
-                                        }
-                                        firewall::UserChoice::DenyOnce => {
-                                            println!("[Firewall] Отказ пользователем для '{}'.", accessor.exe_name);
-                                            let _guard = sentinel::InternalUpdateGuard::new();
-                                            write_clipboard_text(hwnd, "");
-                                            return LRESULT(0);
-                                        }
-                                        firewall::UserChoice::AlwaysDeny => {
-                                            if let Ok(mut lock) = APP_STATE.lock() {
-                                                if let Some(state) = lock.as_mut() {
-                                                    state.config.firewall.blacklist.push(accessor.exe_name.clone());
-                                                }
-                                            }
-                                            let _guard = sentinel::InternalUpdateGuard::new();
-                                            write_clipboard_text(hwnd, "");
-                                            return LRESULT(0);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 3. Читаем текущий текст
+                // 2. Читаем текущий текст буфера
                 let Some(text) = read_clipboard_text(hwnd) else {
                     return LRESULT(0);
                 };
@@ -225,6 +149,14 @@ unsafe extern "system" fn window_proc(
                 // Проверяем, не является ли текст точной копией того, что мы сами записали
                 if sentinel::is_same_as_last_written(&text) {
                     return LRESULT(0);
+                }
+
+                // 3. Журнал аудита: фиксируем дату, путь к процессу и прочитанный текст
+                if let Some(accessor) = radar::detect_clipboard_reader() {
+                    let my_pid = std::process::id();
+                    if accessor.pid != my_pid {
+                        audit::log_access(&accessor.full_path, &text);
+                    }
                 }
 
                 // 4. CleanClip: санитайзер трекеров ссылок и zero-width символов
@@ -344,6 +276,9 @@ unsafe extern "system" fn window_proc(
                             "Буфер обмена и история очищены.",
                             false,
                         );
+                    }
+                    ui::tray::ID_TRAY_OPEN_LOG => {
+                        audit::open_log_file();
                     }
                     ui::tray::ID_TRAY_EXIT => {
                         let _ = DestroyWindow(hwnd);
@@ -500,20 +435,26 @@ fn print_help() {
     println!("Использование:");
     println!("  ghostclip                 Запустить интерактивное меню настройки (стрелочки)");
     println!("  ghostclip --daemon        Запустить защиту сразу в трее без меню (флаг: -d)");
+    println!("  ghostclip --log           Открыть файл журнала обращений к буферу (флаг: -l)");
     println!("  ghostclip --help          Показать эту справку (флаг: -h)\n");
     println!("Функции:");
     println!("  • CleanClip URLs          Очистка ссылок от UTM, fbclid, gclid трекеров");
     println!("  • CleanClip Zero-Width    Удаление невидимых скрытых символов слежки");
     println!("  • Secrets Detector        Поиск токенов API, JWT, криптокошельков и паролей");
     println!("  • Bank Card Check         Проверка номеров карт по алгоритму Луна");
-    println!("  • Clipboard Firewall      Брандмауэр от фоновых программ-шпионов");
-    println!("  • Intent-Aware Bypass     Зеленый коридор 500 мс при осознанном Ctrl+V");
+    println!("  • Audit Log               Журнал: Дата, Путь к процессу и Что прочитано");
     println!("  • PanicFlush              Экстренный сброс памяти по Ctrl+Shift+Alt+P");
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut config = AppConfig::load_or_create("config.toml");
+
+    // Открыть лог в Блокноте по флагу --log или -l
+    if args.iter().any(|a| a == "--log" || a == "-l") {
+        audit::open_log_file();
+        return;
+    }
 
     // Прямой запуск демона по флагу --daemon или -d
     if args.iter().any(|a| a == "--daemon" || a == "--tray" || a == "-d") {
