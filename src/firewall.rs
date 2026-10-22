@@ -84,7 +84,9 @@ pub fn has_recent_user_intent(pid: u32) -> bool {
 pub fn grant_timed_access(process_name: &str, duration: Duration) {
     let lower_name = process_name.to_lowercase();
     with_state(|state| {
-        state.timed_allowances.insert(lower_name, Instant::now() + duration);
+        state
+            .timed_allowances
+            .insert(lower_name, Instant::now() + duration);
     });
 }
 
@@ -112,8 +114,16 @@ pub fn evaluate_access(process_name: &str, pid: u32, config: &FirewallConfig) ->
     let lower_name = process_name.to_lowercase();
 
     // 1. Проверка черного списка
-    if config.blacklist.iter().any(|b| b.to_lowercase() == lower_name) {
-        return AccessDecision::DenyHoneypot(if config.use_honeypot { "" } else { "" });
+    if config
+        .blacklist
+        .iter()
+        .any(|b| b.to_lowercase() == lower_name)
+    {
+        return AccessDecision::DenyHoneypot(if config.use_honeypot {
+            "[PROTECTED]"
+        } else {
+            ""
+        });
     }
 
     // 2. Intent-Aware Auto-Pass: если пользователь сам нажал вставку
@@ -122,7 +132,11 @@ pub fn evaluate_access(process_name: &str, pid: u32, config: &FirewallConfig) ->
     }
 
     // 3. Проверка белого списка из config.toml
-    if config.whitelist.iter().any(|w| w.to_lowercase() == lower_name) {
+    if config
+        .whitelist
+        .iter()
+        .any(|w| w.to_lowercase() == lower_name)
+    {
         return AccessDecision::Allow;
     }
 
@@ -154,7 +168,7 @@ mod tests {
         cfg.blacklist.push("malware.exe".to_string());
 
         let decision = evaluate_access("malware.exe", 9999, &cfg);
-        assert_eq!(decision, AccessDecision::DenyHoneypot(""));
+        assert_eq!(decision, AccessDecision::DenyHoneypot("[PROTECTED]"));
     }
 
     #[test]
@@ -163,13 +177,19 @@ mod tests {
         let pid = 5555;
 
         // До нажатия Ctrl+V — должен спросить
-        assert_eq!(evaluate_access("unknown.exe", pid, &cfg), AccessDecision::AskUser);
+        assert_eq!(
+            evaluate_access("unknown.exe", pid, &cfg),
+            AccessDecision::AskUser
+        );
 
         // Пользователь нажал Ctrl+V в этом окне
         record_user_paste_intent(pid);
 
         // В течение 500 мс — разрешено сразу
-        assert_eq!(evaluate_access("unknown.exe", pid, &cfg), AccessDecision::Allow);
+        assert_eq!(
+            evaluate_access("unknown.exe", pid, &cfg),
+            AccessDecision::Allow
+        );
     }
 
     #[test]

@@ -1,12 +1,12 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Модуль Anti-Loop Sentinel: защита от бесконечного цикла сообщений WM_CLIPBOARDUPDATE.
-/// Когда GhostClip очищает ссылку или затирает буфер, Windows шлет повторное уведомление.
-/// Этот модуль позволяет безошибочно определить, что изменение буфера сделано нашей программой,
-/// и проигнорировать его.
+// Модуль Anti-Loop Sentinel: защита от бесконечного цикла сообщений WM_CLIPBOARDUPDATE.
+// Когда GhostClip очищает ссылку или затирает буфер, Windows шлет повторное уведомление.
+// Этот модуль позволяет безошибочно определить, что изменение буфера сделано нашей программой,
+// и проигнорировать его.
 
 static IS_INTERNAL_UPDATE: AtomicBool = AtomicBool::new(false);
 static LAST_WRITTEN_HASH: Mutex<Option<u64>> = Mutex::new(None);
@@ -40,6 +40,16 @@ pub fn is_internal_update() -> bool {
     IS_INTERNAL_UPDATE.load(Ordering::SeqCst)
 }
 
+/// Устанавливает флаг внутренней записи в буфер обмена.
+pub fn set_internal_update() {
+    IS_INTERNAL_UPDATE.store(true, Ordering::SeqCst);
+}
+
+/// Проверяет и атомарно сбрасывает флаг внутренней записи в буфер обмена.
+pub fn check_and_clear_internal_update() -> bool {
+    IS_INTERNAL_UPDATE.swap(false, Ordering::SeqCst)
+}
+
 /// Запоминает хеш текста, который наша программа только что записала в буфер обмена.
 pub fn record_written_text(text: &str) {
     let h = hash_text(text);
@@ -51,10 +61,10 @@ pub fn record_written_text(text: &str) {
 /// Проверяет, совпадает ли текст в буфере с тем, что мы сами туда только что положили.
 pub fn is_same_as_last_written(text: &str) -> bool {
     let h = hash_text(text);
-    if let Ok(lock) = LAST_WRITTEN_HASH.lock() {
-        if let Some(last_hash) = *lock {
-            return last_hash == h;
-        }
+    if let Ok(lock) = LAST_WRITTEN_HASH.lock()
+        && let Some(last_hash) = *lock
+    {
+        return last_hash == h;
     }
     false
 }
@@ -79,5 +89,13 @@ mod tests {
         record_written_text(text);
         assert!(is_same_as_last_written(text));
         assert!(!is_same_as_last_written("https://other.com"));
+    }
+
+    #[test]
+    fn test_check_and_clear() {
+        assert!(!check_and_clear_internal_update());
+        set_internal_update();
+        assert!(check_and_clear_internal_update());
+        assert!(!check_and_clear_internal_update());
     }
 }

@@ -1,5 +1,5 @@
-/// Модуль CleanClip: очистка ссылок от рекламных и шпионских трекинг-параметров,
-/// а также удаление невидимых zero-width символов.
+//! Модуль CleanClip: очистка ссылок от рекламных и шпионских трекинг-параметров,
+//! а также удаление невидимых zero-width символов.
 
 /// Список известных параметров отслеживания (tracking parameters),
 /// которые внедряются в URL-ссылки аналитическими системами и соцсетями.
@@ -10,20 +10,20 @@ const TRACKING_PARAMS: &[&str] = &[
     "utm_term",
     "utm_content",
     "utm_id",
-    "fbclid",       // Facebook Click ID
-    "gclid",        // Google Click ID
+    "fbclid", // Facebook Click ID
+    "gclid",  // Google Click ID
     "gclsrc",
     "dclid",
-    "yclid",        // Yandex Click ID
+    "yclid", // Yandex Click ID
     "ym_debug",
-    "si",           // YouTube Share Identifier
+    "si", // YouTube Share Identifier
     "ref",
     "ref_src",
     "ref_url",
-    "igshid",       // Instagram Share ID
-    "mc_cid",       // MailChimp
+    "igshid", // Instagram Share ID
+    "mc_cid", // MailChimp
     "mc_eid",
-    "spm",          // AliExpress tracking
+    "spm", // AliExpress tracking
     "scm",
 ];
 
@@ -38,7 +38,8 @@ fn is_zero_width_char(c: char) -> bool {
         | '\u{FEFF}' // Zero-Width No-Break Space (BOM)
         | '\u{200E}' // Left-to-Right Mark
         | '\u{200F}' // Right-to-Left Mark
-        | '\u{202A}'..='\u{202E}' // Bidi Overrides
+        | '\u{202A}'
+            ..='\u{202E}' // Bidi Overrides
         | '\u{2060}' // Word Joiner
     )
 }
@@ -121,7 +122,11 @@ pub fn clean_url(url: &str) -> (String, bool) {
 
 /// Комплексная очистка скопированного текста.
 /// Возвращает очищенную строку и флаг, произошли ли какие-то изменения.
-pub fn sanitize_text(text: &str, clean_urls_enabled: bool, clean_zw_enabled: bool) -> (String, bool) {
+pub fn sanitize_text(
+    text: &str,
+    clean_urls_enabled: bool,
+    clean_zw_enabled: bool,
+) -> (String, bool) {
     let mut current = text.to_string();
     let mut any_change = false;
 

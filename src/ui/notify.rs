@@ -1,18 +1,19 @@
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_INFO, NIIF_INFO, NIIF_WARNING, NIM_MODIFY, NOTIFYICONDATAW,
+    NIF_INFO, NIIF_INFO, NIIF_WARNING, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 
 /// Отображает нативное системное всплывающее уведомление Windows (Toast / Balloon notification).
 pub fn show_notification(hwnd: HWND, title: &str, message: &str, is_warning: bool) {
-    let mut nid = NOTIFYICONDATAW::default();
-    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = hwnd;
-    nid.uID = 1;
-    nid.uFlags = NIF_INFO;
-
     let flag = if is_warning { NIIF_WARNING } else { NIIF_INFO };
-    nid.dwInfoFlags = flag;
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: 1,
+        uFlags: NIF_INFO,
+        dwInfoFlags: flag,
+        ..Default::default()
+    };
 
     // Копируем заголовок в UTF-16 буфер (макс 64 символа)
     let title_utf16: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();

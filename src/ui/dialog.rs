@@ -1,17 +1,18 @@
 #![allow(dead_code)]
 
 use std::sync::atomic::{AtomicI32, Ordering};
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::CreateSolidBrush;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    KillTimer, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer,
-    SetWindowTextW, ShowWindow, TranslateMessage, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CW_USEDEFAULT,
-    MSG, SW_SHOW, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_TIMER,
-    WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, GetMessageW, KillTimer, MSG, PostQuitMessage, RegisterClassW, SW_SHOW,
+    SetForegroundWindow, SetTimer, SetWindowTextW, ShowWindow, TranslateMessage, WM_COMMAND,
+    WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST,
+    WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
+use windows::core::{PCWSTR, w};
 
 use crate::firewall::UserChoice;
 
@@ -36,7 +37,7 @@ unsafe extern "system" fn dialog_wnd_proc(
         match msg {
             WM_CREATE => {
                 // Запускаем секундный таймер на 7 секунд обратного отсчета
-                SetTimer(hwnd, TIMER_ID, 1000, None);
+                let _ = SetTimer(hwnd, TIMER_ID, 1000, None);
                 LRESULT(0)
             }
             WM_TIMER => {
@@ -47,14 +48,15 @@ unsafe extern "system" fn dialog_wnd_proc(
                     let _ = KillTimer(hwnd, TIMER_ID);
                     let _ = DestroyWindow(hwnd);
                 } else {
-                    let title = format!("GhostClip Firewall (Авто-отказ через {} сек)\0", left);
-                    let title_utf16: Vec<u16> = title.encode_utf16().collect();
+                    let title = format!("GhostClip Firewall (Авто-отказ через {} сек)", left);
+                    let title_utf16: Vec<u16> =
+                        title.encode_utf16().chain(std::iter::once(0)).collect();
                     let _ = SetWindowTextW(hwnd, PCWSTR(title_utf16.as_ptr()));
                 }
                 LRESULT(0)
             }
             WM_COMMAND => {
-                let btn_id = (wparam.0 & 0xFFFF) as usize;
+                let btn_id = wparam.0 & 0xFFFF;
                 let choice_val = match btn_id {
                     ID_BTN_ALWAYS_ALLOW => 1,
                     ID_BTN_ALLOW_15MIN => 2,
@@ -97,7 +99,7 @@ pub fn prompt_firewall_decision(app_name: &str, pid: u32, timeout_secs: u32) -> 
     REMAINING_SECS.store(timeout_secs as i32, Ordering::SeqCst);
 
     let class_name = w!("GhostClipFirewallDlg");
-    let instance = HINSTANCE(std::ptr::null_mut());
+    let instance = HINSTANCE(unsafe { GetModuleHandleW(None) }.unwrap_or_default().0);
 
     unsafe {
         let wc = WNDCLASSW {
@@ -109,8 +111,8 @@ pub fn prompt_firewall_decision(app_name: &str, pid: u32, timeout_secs: u32) -> 
         };
         let _ = RegisterClassW(&wc);
 
-        let title = format!("GhostClip Firewall (Авто-отказ через {} сек)\0", timeout_secs);
-        let title_utf16: Vec<u16> = title.encode_utf16().collect();
+        let title = format!("GhostClip Firewall (Авто-отказ через {} сек)", timeout_secs);
+        let title_utf16: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
 
         // Создаем компактное окно по центру (440 x 320 пикселей)
         let hwnd = CreateWindowExW(
@@ -156,17 +158,31 @@ pub fn prompt_firewall_decision(app_name: &str, pid: u32, timeout_secs: u32) -> 
 
         // 5 Кнопок с понятными надписями
         let buttons = [
-            (ID_BTN_ALWAYS_ALLOW, "1. Разрешить всегда (в белый список)", 110),
+            (
+                ID_BTN_ALWAYS_ALLOW,
+                "1. Разрешить всегда (в белый список)",
+                110,
+            ),
             (ID_BTN_ALLOW_15MIN, "2. Разрешить на 15 минут", 145),
             (ID_BTN_ALLOW_ONCE, "3. Разрешить на один раз", 180),
             (ID_BTN_DENY_ONCE, "4. Отказать (вернуть пустоту)", 215),
-            (ID_BTN_ALWAYS_DENY, "5. Отказывать всегда (в черный список)", 250),
+            (
+                ID_BTN_ALWAYS_DENY,
+                "5. Отказывать всегда (в черный список)",
+                250,
+            ),
         ];
 
         for (id, text, y) in buttons {
             let btn_utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-            let btn_flag = if id == ID_BTN_DENY_ONCE { BS_DEFPUSHBUTTON } else { BS_PUSHBUTTON };
-            let style = WS_CHILD | WS_VISIBLE | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(btn_flag as u32);
+            let btn_flag = if id == ID_BTN_DENY_ONCE {
+                BS_DEFPUSHBUTTON
+            } else {
+                BS_PUSHBUTTON
+            };
+            let style = WS_CHILD
+                | WS_VISIBLE
+                | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(btn_flag as u32);
             let _ = CreateWindowExW(
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
                 w!("BUTTON"),

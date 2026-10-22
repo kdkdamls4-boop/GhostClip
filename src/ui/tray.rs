@@ -1,14 +1,14 @@
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFYICONDATAW,
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
-    SetForegroundWindow, TrackPopupMenu, HICON, ICONINFO, MF_SEPARATOR, MF_STRING, TPM_RIGHTBUTTON,
+    HICON, ICONINFO, MF_SEPARATOR, MF_STRING, SetForegroundWindow, TPM_RIGHTBUTTON, TrackPopupMenu,
 };
+use windows::core::PCWSTR;
 
 /// Состояния иконки в системном трее Windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,13 +81,15 @@ fn create_colored_icon(state: TrayState) -> HICON {
 pub fn init_tray_icon(hwnd: HWND, state: TrayState) -> HICON {
     let hicon = create_colored_icon(state);
 
-    let mut nid = NOTIFYICONDATAW::default();
-    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = hwnd;
-    nid.uID = 1;
-    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-    nid.uCallbackMessage = WM_TRAY_CALLBACK;
-    nid.hIcon = hicon;
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: 1,
+        uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
+        uCallbackMessage: WM_TRAY_CALLBACK,
+        hIcon: hicon,
+        ..Default::default()
+    };
 
     let tip = match state {
         TrayState::Green => "GhostClip Shield: Активен (Все спокойно)",
@@ -107,15 +109,22 @@ pub fn init_tray_icon(hwnd: HWND, state: TrayState) -> HICON {
 }
 
 /// Динамически обновляет цвет иконки и всплывающую подсказку в трее.
-pub fn update_tray_state(hwnd: HWND, old_icon: HICON, new_state: TrayState, tooltip_extra: Option<&str>) -> HICON {
+pub fn update_tray_state(
+    hwnd: HWND,
+    old_icon: HICON,
+    new_state: TrayState,
+    tooltip_extra: Option<&str>,
+) -> HICON {
     let new_icon = create_colored_icon(new_state);
 
-    let mut nid = NOTIFYICONDATAW::default();
-    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = hwnd;
-    nid.uID = 1;
-    nid.uFlags = NIF_ICON | NIF_TIP;
-    nid.hIcon = new_icon;
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: 1,
+        uFlags: NIF_ICON | NIF_TIP,
+        hIcon: new_icon,
+        ..Default::default()
+    };
 
     let tip = match (new_state, tooltip_extra) {
         (TrayState::Yellow, Some(extra)) => format!("GhostClip: {}", extra),
@@ -141,10 +150,12 @@ pub fn update_tray_state(hwnd: HWND, old_icon: HICON, new_state: TrayState, tool
 
 /// Удаляет иконку из трея при закрытии приложения.
 pub fn remove_tray_icon(hwnd: HWND, icon: HICON) {
-    let mut nid = NOTIFYICONDATAW::default();
-    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = hwnd;
-    nid.uID = 1;
+    let nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: 1,
+        ..Default::default()
+    };
 
     unsafe {
         let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
@@ -159,8 +170,12 @@ pub fn show_tray_menu(hwnd: HWND) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
 
-        let panic_text: Vec<u16> = "Экстренно очистить буфер (PanicFlush)\0".encode_utf16().collect();
-        let log_text: Vec<u16> = "Открыть лог доступа (clipboard_access.log)\0".encode_utf16().collect();
+        let panic_text: Vec<u16> = "Экстренно очистить буфер (PanicFlush)\0"
+            .encode_utf16()
+            .collect();
+        let log_text: Vec<u16> = "Открыть лог доступа (clipboard_access.log)\0"
+            .encode_utf16()
+            .collect();
         let exit_text: Vec<u16> = "Выход из GhostClip Shield\0".encode_utf16().collect();
 
         let _ = AppendMenuW(menu, MF_STRING, ID_TRAY_PANIC, PCWSTR(panic_text.as_ptr()));

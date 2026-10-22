@@ -3,9 +3,9 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
     style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 
 use crate::config::AppConfig;
 
@@ -136,9 +136,18 @@ fn render_menu(cfg: &AppConfig, selected: usize) {
     let _ = execute!(out, MoveTo(0, 0));
 
     // Заголовок
-    println_colored(Color::Cyan, "╔══════════════════════════════════════════════════════════════════════════════╗");
-    println_colored(Color::Cyan, "║              🛡️  GHOSTCLIP SHIELD (GCB) — ИНТЕРАКТИВНЫЙ ЦЕНТР УПРАВЛЕНИЯ     ║");
-    println_colored(Color::Cyan, "╚══════════════════════════════════════════════════════════════════════════════╝");
+    println_colored(
+        Color::Cyan,
+        "╔══════════════════════════════════════════════════════════════════════════════╗",
+    );
+    println_colored(
+        Color::Cyan,
+        "║              🛡️  GHOSTCLIP SHIELD (GCB) — ИНТЕРАКТИВНЫЙ ЦЕНТР УПРАВЛЕНИЯ     ║",
+    );
+    println_colored(
+        Color::Cyan,
+        "╚══════════════════════════════════════════════════════════════════════════════╝",
+    );
     println_colored(
         Color::DarkGrey,
         "  [↑ / ↓] Навигация   [Пробел / ← / →] Вкл/Выкл   [Enter] Выбор   [Esc] Выход\n",
@@ -147,13 +156,31 @@ fn render_menu(cfg: &AppConfig, selected: usize) {
     // Список модулей с их текущим статусом
     let items = [
         ("CleanClip URLs (Очистка ссылок)", cfg.general.clean_urls),
-        ("CleanClip Zero-Width (Скрытые символы)", cfg.general.clean_zero_width),
-        ("Детектор API-токенов и SSH-ключей", cfg.detector.check_api_keys),
-        ("Проверка карт (Алгоритм Луна)", cfg.detector.check_credit_cards),
+        (
+            "CleanClip Zero-Width (Скрытые символы)",
+            cfg.general.clean_zero_width,
+        ),
+        (
+            "Детектор API-токенов и SSH-ключей",
+            cfg.detector.check_api_keys,
+        ),
+        (
+            "Проверка карт (Алгоритм Луна)",
+            cfg.detector.check_credit_cards,
+        ),
         ("Clipboard Firewall (Файрвол буфера)", cfg.firewall.enabled),
-        ("Intent-Aware Auto-Pass (Коридор 500мс)", cfg.firewall.intent_aware_bypass),
-        ("Honeypot Disinformation (Подмена фейком)", cfg.firewall.use_honeypot),
-        ("Panic Lock Workstation (Win+L при сбросе)", cfg.panic.lock_workstation),
+        (
+            "Intent-Aware Auto-Pass (Коридор 500мс)",
+            cfg.firewall.intent_aware_bypass,
+        ),
+        (
+            "Honeypot Disinformation (Подмена фейком)",
+            cfg.firewall.use_honeypot,
+        ),
+        (
+            "Panic Lock Workstation (Win+L при сбросе)",
+            cfg.panic.lock_workstation,
+        ),
     ];
 
     for (i, (name, enabled)) in items.iter().enumerate() {
@@ -161,14 +188,29 @@ fn render_menu(cfg: &AppConfig, selected: usize) {
     }
 
     // Пункт 8: TTL таймер
-    let ttl_text = format!("Время жизни секрета (TTL): [ {} сек ]", cfg.general.secret_ttl_seconds);
+    let ttl_text = format!(
+        "Время жизни секрета (TTL): [ {} сек ]",
+        cfg.general.secret_ttl_seconds
+    );
     render_custom_row(selected == 8, &ttl_text, Color::Yellow);
 
     println!();
     // Пункты действий 9, 10, 11, 12
-    render_action_row(selected == 9, "🚀  [ СОХРАНИТЬ И ЗАПУСТИТЬ ЗАЩИТУ В ТРЕЕ ]", Color::Green);
-    render_action_row(selected == 10, "📄  [ Открыть журнал clipboard_access.log ]", Color::Cyan);
-    render_action_row(selected == 11, "💾  [ Сохранить в config.toml и выйти ]", Color::White);
+    render_action_row(
+        selected == 9,
+        "🚀  [ СОХРАНИТЬ И ЗАПУСТИТЬ ЗАЩИТУ В ТРЕЕ ]",
+        Color::Green,
+    );
+    render_action_row(
+        selected == 10,
+        "📄  [ Открыть журнал clipboard_access.log ]",
+        Color::Cyan,
+    );
+    render_action_row(
+        selected == 11,
+        "💾  [ Сохранить в config.toml и выйти ]",
+        Color::White,
+    );
     render_action_row(selected == 12, "❌  [ Выйти без сохранения ]", Color::Red);
 
     println!("\n");
@@ -180,8 +222,16 @@ fn render_menu(cfg: &AppConfig, selected: usize) {
 
 fn render_toggle_row(is_selected: bool, label: &str, enabled: bool) {
     let prefix = if is_selected { " ▶ " } else { "   " };
-    let status_str = if enabled { "[ ВКЛ  ]" } else { "[ ВЫКЛ ]" };
-    let status_color = if enabled { Color::Green } else { Color::DarkGrey };
+    let status_str = if enabled {
+        "[ ВКЛ  ]"
+    } else {
+        "[ ВЫКЛ ]"
+    };
+    let status_color = if enabled {
+        Color::Green
+    } else {
+        Color::DarkGrey
+    };
 
     if is_selected {
         let _ = execute!(
@@ -328,27 +378,32 @@ fn render_description_box(selected: usize) {
         ),
         11 => (
             "Сохранить и выйти",
-            &[
-                "Записывает выбранные настройки в файл config.toml и завершает работу CLI.",
-            ],
+            &["Записывает выбранные настройки в файл config.toml и завершает работу CLI."],
         ),
         _ => (
             "Выход без сохранения",
-            &[
-                "Закрывает интерактивное меню, оставив файл config.toml без изменений.",
-            ],
+            &["Закрывает интерактивное меню, оставив файл config.toml без изменений."],
         ),
     };
 
-    println_colored(Color::Cyan, "┌──────────────────────── СПРАВКА И ОПИСАНИЕ МОДУЛЯ ───────────────────────────┐");
+    println_colored(
+        Color::Cyan,
+        "┌──────────────────────── СПРАВКА И ОПИСАНИЕ МОДУЛЯ ───────────────────────────┐",
+    );
     let title_line = format!("│  Функция: {:<67} │", desc.0);
     println_colored(Color::Yellow, &title_line);
-    println_colored(Color::Cyan, "├──────────────────────────────────────────────────────────────────────────────┤");
+    println_colored(
+        Color::Cyan,
+        "├──────────────────────────────────────────────────────────────────────────────┤",
+    );
     for line in desc.1 {
         let text_line = format!("│  {:<76} │", line);
         println_colored(Color::White, &text_line);
     }
-    println_colored(Color::Cyan, "└──────────────────────────────────────────────────────────────────────────────┘");
+    println_colored(
+        Color::Cyan,
+        "└──────────────────────────────────────────────────────────────────────────────┘",
+    );
 }
 
 fn println_colored(color: Color, text: &str) {

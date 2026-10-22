@@ -1,19 +1,20 @@
-use std::sync::Mutex;
-use windows::core::w;
+use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::{
-    AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardData,
-    OpenClipboard, RemoveClipboardFormatListener, SetClipboardData,
+    AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
+    RemoveClipboardFormatListener, SetClipboardData,
 };
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{
-    GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+    GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    HICON, KillTimer, PostQuitMessage, RegisterClassW, SetTimer, TranslateMessage, MSG,
-    WM_CLIPBOARDUPDATE, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_RBUTTONUP, WM_TIMER,
-    WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, HICON,
+    KillTimer, MSG, PostQuitMessage, RegisterClassW, SetTimer, TranslateMessage,
+    WM_CLIPBOARDUPDATE, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+    WS_OVERLAPPEDWINDOW,
 };
+use windows::core::w;
 
 mod audit;
 mod cleaner;
@@ -29,24 +30,24 @@ mod shredder;
 mod ui;
 
 use config::AppConfig;
-use ui::tray::{init_tray_icon, remove_tray_icon, show_tray_menu, update_tray_state, TrayState};
+use ui::tray::{TrayState, init_tray_icon, remove_tray_icon, show_tray_menu, update_tray_state};
 
 const TIMER_STATUS_CHECK: usize = 5001;
 
+/// Системный формат текста буфера обмена Windows (CF_UNICODETEXT).
+const CF_UNICODETEXT: u32 = 13;
+
+/// Потокобезопасная Newtype-обёртка над системным дескриптором иконки Windows.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SafeHicon(pub HICON);
+unsafe impl Send for SafeHicon {}
+unsafe impl Sync for SafeHicon {}
+
 struct AppState {
-    config: AppConfig,
-    tray_icon_raw: usize,
+    config: Arc<AppConfig>,
+    tray_icon: SafeHicon,
     current_state: TrayState,
-}
-
-impl AppState {
-    fn tray_icon(&self) -> HICON {
-        HICON(self.tray_icon_raw as *mut _)
-    }
-
-    fn set_tray_icon(&mut self, icon: HICON) {
-        self.tray_icon_raw = icon.0 as usize;
-    }
 }
 
 static APP_STATE: Mutex<Option<AppState>> = Mutex::new(None);
@@ -58,8 +59,7 @@ fn read_clipboard_text(hwnd: HWND) -> Option<String> {
             return None;
         }
 
-        // 13 = CF_UNICODETEXT
-        let handle_res = GetClipboardData(13);
+        let handle_res = GetClipboardData(CF_UNICODETEXT);
         let Ok(handle) = handle_res else {
             let _ = CloseClipboard();
             return None;
@@ -72,13 +72,19 @@ fn read_clipboard_text(hwnd: HWND) -> Option<String> {
             return None;
         }
 
-        let slice = std::slice::from_raw_parts(ptr as *const u16, usize::MAX / 2);
-        let mut len = 0;
-        while slice[len] != 0 {
-            len += 1;
+        // BUG-001: Безопасное определение размера памяти вместо фиктивного usize::MAX / 2
+        let total_bytes = GlobalSize(hglobal);
+        let total_u16 = total_bytes / std::mem::size_of::<u16>();
+        if total_u16 == 0 {
+            let _ = GlobalUnlock(hglobal);
+            let _ = CloseClipboard();
+            return None;
         }
 
+        let slice = std::slice::from_raw_parts(ptr as *const u16, total_u16);
+        let len = slice.iter().position(|&c| c == 0).unwrap_or(total_u16);
         let text = String::from_utf16_lossy(&slice[..len]);
+
         let _ = GlobalUnlock(hglobal);
         let _ = CloseClipboard();
 
@@ -113,8 +119,7 @@ fn write_clipboard_text(hwnd: HWND, text: &str) -> bool {
         std::ptr::copy_nonoverlapping(utf16.as_ptr() as *const u8, ptr as *mut u8, bytes_len);
         let _ = GlobalUnlock(handle);
 
-        // 13 = CF_UNICODETEXT
-        let set_res = SetClipboardData(13, HANDLE(handle.0));
+        let set_res = SetClipboardData(CF_UNICODETEXT, HANDLE(handle.0));
         let _ = CloseClipboard();
 
         set_res.is_ok()
@@ -131,14 +136,16 @@ unsafe extern "system" fn window_proc(
     unsafe {
         match msg {
             WM_CLIPBOARDUPDATE => {
-                // 1. Anti-Loop Sentinel: если изменение сделано нашей программой — игнорируем!
-                if sentinel::is_internal_update() {
+                // 1. Anti-Loop Sentinel: если изменение сделано нашей программой — атомарно гасим флаг и игнорируем!
+                if sentinel::check_and_clear_internal_update() || sentinel::is_internal_update() {
                     return LRESULT(0);
                 }
 
                 let cfg = {
-                    let lock = APP_STATE.lock().unwrap();
-                    lock.as_ref().map(|s| s.config.clone()).unwrap_or_default()
+                    let lock = APP_STATE.lock().unwrap_or_else(|p| p.into_inner());
+                    lock.as_ref()
+                        .map(|s| Arc::clone(&s.config))
+                        .unwrap_or_else(|| Arc::new(AppConfig::default()))
                 };
 
                 // 2. Читаем текущий текст буфера
@@ -151,7 +158,7 @@ unsafe extern "system" fn window_proc(
                     return LRESULT(0);
                 }
 
-                // 3. Журнал аудита: фиксируем дату, путь к процессу и прочитанный текст
+                // 3. Журнал аудита: фиксируем дату, путь к процессу и текст
                 if let Some(accessor) = radar::detect_clipboard_reader() {
                     let my_pid = std::process::id();
                     if accessor.pid != my_pid {
@@ -169,6 +176,7 @@ unsafe extern "system" fn window_proc(
                 let effective_text = if modified {
                     // Запоминаем хеш и перезаписываем буфер чистой версией
                     sentinel::record_written_text(&cleaned_text);
+                    sentinel::set_internal_update();
                     let _guard = sentinel::InternalUpdateGuard::new();
                     write_clipboard_text(hwnd, &cleaned_text);
                     println!("[CleanClip] 🧹 Ссылка очищена от трекеров и сохранена в буфер!");
@@ -177,7 +185,7 @@ unsafe extern "system" fn window_proc(
                     text
                 };
 
-                // 4. GhostClip: проверка на наличие конфиденциальных данных
+                // 5. GhostClip: проверка на наличие конфиденциальных данных
                 if let Some(secret) = detector::detect_secret(&effective_text, &cfg.detector) {
                     let desc = secret.description();
                     println!("[GhostClip] 🛡️ Обнаружен секрет: {}", desc);
@@ -185,43 +193,43 @@ unsafe extern "system" fn window_proc(
                     // Запускаем таймер самоуничтожения
                     ghost::arm_timer(cfg.general.secret_ttl_seconds, desc);
 
-                    // Обновляем иконку в трее на Желтый статус
-                    if let Ok(mut lock) = APP_STATE.lock() {
-                        if let Some(state) = lock.as_mut() {
-                            state.current_state = TrayState::Yellow;
-                            let new_icon = update_tray_state(
-                                hwnd,
-                                state.tray_icon(),
-                                TrayState::Yellow,
-                                Some(&format!("Самоуничтожение: {} ({} сек)", desc, cfg.general.secret_ttl_seconds)),
-                            );
-                            state.set_tray_icon(new_icon);
-                        }
+                    // Обновляем иконку в трее на Жёлтый статус
+                    if let Ok(mut lock) = APP_STATE.lock()
+                        && let Some(state) = lock.as_mut()
+                    {
+                        state.current_state = TrayState::Yellow;
+                        let new_icon = update_tray_state(
+                            hwnd,
+                            state.tray_icon.0,
+                            TrayState::Yellow,
+                            Some(&format!(
+                                "Самоуничтожение: {} ({} сек)",
+                                desc, cfg.general.secret_ttl_seconds
+                            )),
+                        );
+                        state.tray_icon = SafeHicon(new_icon);
                     }
 
                     // Показываем нативный тост
                     ui::notify::show_notification(
                         hwnd,
                         "GhostClip Shield: Секрет защищен",
-                        &format!("Обнаружен {}. Буфер будет стерт через {} сек.", desc, cfg.general.secret_ttl_seconds),
+                        &format!(
+                            "Обнаружен {}. Буфер будет стерт через {} сек.",
+                            desc, cfg.general.secret_ttl_seconds
+                        ),
                         false,
                     );
-                } else {
+                } else if ghost::is_armed() {
                     // Если скопирован обычный текст, а таймер еще тикал — сбрасываем его
-                    if ghost::is_armed() {
-                        ghost::disarm_timer();
-                        if let Ok(mut lock) = APP_STATE.lock() {
-                            if let Some(state) = lock.as_mut() {
-                                state.current_state = TrayState::Green;
-                                let new_icon = update_tray_state(
-                                    hwnd,
-                                    state.tray_icon(),
-                                    TrayState::Green,
-                                    None,
-                                );
-                                state.set_tray_icon(new_icon);
-                            }
-                        }
+                    ghost::disarm_timer();
+                    if let Ok(mut lock) = APP_STATE.lock()
+                        && let Some(state) = lock.as_mut()
+                    {
+                        state.current_state = TrayState::Green;
+                        let new_icon =
+                            update_tray_state(hwnd, state.tray_icon.0, TrayState::Green, None);
+                        state.tray_icon = SafeHicon(new_icon);
                     }
                 }
 
@@ -232,19 +240,22 @@ unsafe extern "system" fn window_proc(
                 // Срабатывание PanicFlush по Ctrl + Shift + Alt + P
                 if wparam.0 == hotkeys::PANIC_HOTKEY_ID as usize {
                     let lock_workstation = {
-                        let lock = APP_STATE.lock().unwrap();
-                        lock.as_ref().map(|s| s.config.panic.lock_workstation).unwrap_or(false)
+                        let lock = APP_STATE.lock().unwrap_or_else(|p| p.into_inner());
+                        lock.as_ref()
+                            .map(|s| s.config.panic.lock_workstation)
+                            .unwrap_or(false)
                     };
 
                     hotkeys::execute_panic_flush(lock_workstation);
 
                     // Сбрасываем иконку в трее в нормальное состояние
-                    if let Ok(mut lock) = APP_STATE.lock() {
-                        if let Some(state) = lock.as_mut() {
-                            state.current_state = TrayState::Green;
-                            let new_icon = update_tray_state(hwnd, state.tray_icon(), TrayState::Green, None);
-                            state.set_tray_icon(new_icon);
-                        }
+                    if let Ok(mut lock) = APP_STATE.lock()
+                        && let Some(state) = lock.as_mut()
+                    {
+                        state.current_state = TrayState::Green;
+                        let new_icon =
+                            update_tray_state(hwnd, state.tray_icon.0, TrayState::Green, None);
+                        state.tray_icon = SafeHicon(new_icon);
                     }
 
                     ui::notify::show_notification(
@@ -266,7 +277,7 @@ unsafe extern "system" fn window_proc(
             }
 
             WM_COMMAND => {
-                let item_id = (wparam.0 & 0xFFFF) as usize;
+                let item_id = wparam.0 & 0xFFFF;
                 match item_id {
                     ui::tray::ID_TRAY_PANIC => {
                         hotkeys::execute_panic_flush(false);
@@ -290,29 +301,25 @@ unsafe extern "system" fn window_proc(
 
             WM_TIMER => {
                 // Периодическое обновление статуса таймера в трее
-                if let Ok(mut lock) = APP_STATE.lock() {
-                    if let Some(state) = lock.as_mut() {
-                        if ghost::is_armed() {
-                            if let Some(secs) = ghost::remaining_seconds() {
-                                let text = format!("Таймер секрета: {} сек", secs);
-                                let new_icon = update_tray_state(
-                                    hwnd,
-                                    state.tray_icon(),
-                                    TrayState::Yellow,
-                                    Some(&text),
-                                );
-                                state.set_tray_icon(new_icon);
-                            }
-                        } else if state.current_state == TrayState::Yellow {
-                            state.current_state = TrayState::Green;
+                if let Ok(mut lock) = APP_STATE.lock()
+                    && let Some(state) = lock.as_mut()
+                {
+                    if ghost::is_armed() {
+                        if let Some(secs) = ghost::remaining_seconds() {
+                            let text = format!("Таймер секрета: {} сек", secs);
                             let new_icon = update_tray_state(
                                 hwnd,
-                                state.tray_icon(),
-                                TrayState::Green,
-                                None,
+                                state.tray_icon.0,
+                                TrayState::Yellow,
+                                Some(&text),
                             );
-                            state.set_tray_icon(new_icon);
+                            state.tray_icon = SafeHicon(new_icon);
                         }
+                    } else if state.current_state == TrayState::Yellow {
+                        state.current_state = TrayState::Green;
+                        let new_icon =
+                            update_tray_state(hwnd, state.tray_icon.0, TrayState::Green, None);
+                        state.tray_icon = SafeHicon(new_icon);
                     }
                 }
                 LRESULT(0)
@@ -325,10 +332,10 @@ unsafe extern "system" fn window_proc(
                 hotkeys::uninstall_paste_intent_hook();
                 let _ = KillTimer(hwnd, TIMER_STATUS_CHECK);
 
-                if let Ok(mut lock) = APP_STATE.lock() {
-                    if let Some(state) = lock.take() {
-                        remove_tray_icon(hwnd, state.tray_icon());
-                    }
+                if let Ok(mut lock) = APP_STATE.lock()
+                    && let Some(state) = lock.take()
+                {
+                    remove_tray_icon(hwnd, state.tray_icon.0);
                 }
 
                 PostQuitMessage(0);
@@ -349,7 +356,7 @@ fn run_daemon(config: AppConfig) {
 
     unsafe {
         let class_name = w!("GhostClipShieldCoreClass");
-        let instance = HINSTANCE(std::ptr::null_mut());
+        let instance = HINSTANCE(GetModuleHandleW(None).unwrap_or_default().0);
 
         let wc = WNDCLASSW {
             lpfnWndProc: Some(window_proc),
@@ -383,10 +390,10 @@ fn run_daemon(config: AppConfig) {
         // Создаем иконку в системном трее
         let tray_icon = init_tray_icon(hwnd, TrayState::Green);
         {
-            let mut lock = APP_STATE.lock().unwrap();
+            let mut lock = APP_STATE.lock().unwrap_or_else(|p| p.into_inner());
             *lock = Some(AppState {
-                config: config.clone(),
-                tray_icon_raw: tray_icon.0 as usize,
+                config: Arc::new(config),
+                tray_icon: SafeHicon(tray_icon),
                 current_state: TrayState::Green,
             });
         }
@@ -410,7 +417,7 @@ fn run_daemon(config: AppConfig) {
         println!("- Защита осознанной вставки (Ctrl + V зеленый коридор) активна.");
 
         // Таймер обновления состояния трея каждую секунду
-        SetTimer(hwnd, TIMER_STATUS_CHECK, 1000, None);
+        let _ = SetTimer(hwnd, TIMER_STATUS_CHECK, 1000, None);
 
         // Показываем стартовое уведомление в Windows
         ui::notify::show_notification(
@@ -457,7 +464,10 @@ fn main() {
     }
 
     // Прямой запуск демона по флагу --daemon или -d
-    if args.iter().any(|a| a == "--daemon" || a == "--tray" || a == "-d") {
+    if args
+        .iter()
+        .any(|a| a == "--daemon" || a == "--tray" || a == "-d")
+    {
         run_daemon(config);
         return;
     }

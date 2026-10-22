@@ -4,7 +4,7 @@ use std::path::Path;
 
 /// Главная структура конфигурации приложения GhostClip Shield.
 /// Содержит все настройки программы, разделенные по логическим секциям.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     pub general: GeneralConfig,
     pub detector: DetectorConfig,
@@ -54,7 +54,7 @@ pub struct FirewallConfig {
 }
 
 /// Настройки экстренной кнопки сброса (PanicFlush).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PanicConfig {
     /// Блокировать ли рабочую станцию (Win+L) при сбросе
     pub lock_workstation: bool,
@@ -102,25 +102,6 @@ impl Default for FirewallConfig {
     }
 }
 
-impl Default for PanicConfig {
-    fn default() -> Self {
-        Self {
-            lock_workstation: false,
-        }
-    }
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            detector: DetectorConfig::default(),
-            firewall: FirewallConfig::default(),
-            panic: PanicConfig::default(),
-        }
-    }
-}
-
 impl AppConfig {
     /// Загружает настройки из файла config.toml.
     /// Если файл отсутствует, создает его с настройками по умолчанию.
@@ -131,7 +112,10 @@ impl AppConfig {
                 Ok(content) => match toml::from_str::<AppConfig>(&content) {
                     Ok(cfg) => return cfg,
                     Err(err) => {
-                        eprintln!("Ошибка парсинга config.toml (используются умолчания): {}", err);
+                        eprintln!(
+                            "Ошибка парсинга config.toml (используются умолчания): {}",
+                            err
+                        );
                     }
                 },
                 Err(err) => {
@@ -150,8 +134,7 @@ impl AppConfig {
 
     /// Сохраняет текущую конфигурацию в файл (например, после настройки в CLI).
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let content = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
         fs::write(path, content)
     }
 }

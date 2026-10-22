@@ -54,9 +54,13 @@ static PATTERNS: OnceLock<SecretPatterns> = OnceLock::new();
 fn get_patterns() -> &'static SecretPatterns {
     PATTERNS.get_or_init(|| SecretPatterns {
         openai: Regex::new(r"(?i)\bsk-[a-zA-Z0-9_\-]{20,}\b").unwrap(),
-        github: Regex::new(r"\b(ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{36}\b|\bgithub_pat_[a-zA-Z0-9_]{50,}\b").unwrap(),
+        github: Regex::new(
+            r"\b(ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{36}\b|\bgithub_pat_[a-zA-Z0-9_]{50,}\b",
+        )
+        .unwrap(),
         aws: Regex::new(r"\b(AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b").unwrap(),
-        jwt: Regex::new(r"\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b").unwrap(),
+        jwt: Regex::new(r"\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b")
+            .unwrap(),
         private_key: Regex::new(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----").unwrap(),
         btc: Regex::new(r"\b(bc1|[13])[a-km-zA-HJ-NP-Z1-9]{25,39}\b").unwrap(),
         eth: Regex::new(r"\b0x[a-fA-F0-9]{40}\b").unwrap(),
@@ -69,7 +73,7 @@ fn get_patterns() -> &'static SecretPatterns {
 /// Это стандартная математическая формула, используемая всеми платежными системами (Visa, MasterCard, МИР).
 pub fn is_valid_luhn(digits_only: &str) -> bool {
     let len = digits_only.len();
-    if len < 13 || len > 19 {
+    if !(13..=19).contains(&len) {
         return false;
     }
 
