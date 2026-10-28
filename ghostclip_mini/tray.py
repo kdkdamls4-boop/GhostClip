@@ -58,16 +58,24 @@ class TrayManager:
     def _menu(self):
         m = user32.CreatePopupMenu()
         is_vis = user32.IsWindowVisible(self._con_hwnd) if self._con_hwnd else True
-        user32.AppendMenuW(m, 0, 10, "Скрыть консоль в трей" if is_vis else "Открыть консоль GhostClip")
-        user32.AppendMenuW(m, 0x0800, 0, None)  # Разделитель
-        user32.AppendMenuW(m, 0, 20, "Очистить буфер обмена")
-        user32.AppendMenuW(m, 0, 30, "ПАНИКА! (Стереть всё и Win+V)")
-        user32.AppendMenuW(m, 0x0800, 0, None)
+
+        items = [
+            (10, "Скрыть консоль в трей" if is_vis else "Открыть консоль GhostClip"),
+            (0, "---"),
+            (20, "Очистить буфер обмена"),
+            (30, "ПАНИКА! (Стереть всё и Win+V)"),
+            (0, "---"),
+        ]
         for i, (name, val) in config.get_status_dict().items():
-            flags = 0x0008 if val else 0  # MF_CHECKED
-            user32.AppendMenuW(m, flags, 100 + i, f"[{ 'ВКЛ' if val else 'ВЫКЛ' }] {name}")
-        user32.AppendMenuW(m, 0x0800, 0, None)
-        user32.AppendMenuW(m, 0, 99, "Выход")
+            items.append((100 + i, f"[{ 'ВКЛ' if val else 'ВЫКЛ' }] {name}", val))
+        items += [(0, "---"), (99, "Выход")]
+
+        for item in items:
+            if item[1] == "---":
+                user32.AppendMenuW(m, 0x0800, 0, None)
+            else:
+                flags = 0x0008 if (len(item) > 2 and item[2]) else 0
+                user32.AppendMenuW(m, flags, item[0], item[1])
 
         pt = wintypes.POINT()
         user32.GetCursorPos(ctypes.byref(pt))
@@ -75,11 +83,13 @@ class TrayManager:
         cmd = user32.TrackPopupMenu(m, 0x0100, pt.x, pt.y, 0, self.hwnd, None)
         user32.DestroyMenu(m)
 
-        if cmd == 10: self.toggle_console()
-        elif cmd == 20: self.on_clear()
-        elif cmd == 30: self.on_panic()
-        elif 101 <= cmd <= 106: self.on_toggle(cmd - 100)
-        elif cmd == 99: self.on_exit()
+        actions = {20: self.on_clear, 30: self.on_panic, 99: self.on_exit}
+        if cmd == 10:
+            self.toggle_console()
+        elif cmd in actions:
+            actions[cmd]()
+        elif 101 <= cmd <= 106:
+            self.on_toggle(cmd - 100)
 
     def toggle_console(self):
         if not self._con_hwnd: return

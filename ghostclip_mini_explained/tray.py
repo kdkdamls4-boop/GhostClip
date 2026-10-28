@@ -22,7 +22,7 @@ NIF_ICON    = 0x02   # Показывать саму иконку
 NIF_TIP     = 0x04   # Показывать всплывающую подсказку при наведении
 NIF_INFO    = 0x10   # Показывать всплывающее уведомление (Balloon tooltip)
 
-# Действия с иконкой: добавить, изменить, удалить
+# Действия с иконкой: добавить (0), изменить (1), удалить (2)
 NIM_ADD    = 0x00
 NIM_MODIFY = 0x01
 NIM_DELETE = 0x02
@@ -96,20 +96,30 @@ class TrayManager:
         m = user32.CreatePopupMenu()  # Создаём пустое всплывающее меню
         is_vis = user32.IsWindowVisible(self._con_hwnd) if self._con_hwnd else True
 
-        # Пункт: Скрыть или Показать консоль
-        user32.AppendMenuW(m, 0, 10, "Скрыть консоль в трей" if is_vis else "Открыть консоль GhostClip")
-        user32.AppendMenuW(m, 0x0800, 0, None)  # 0x0800 = MF_SEPARATOR (линия-разделитель)
-        user32.AppendMenuW(m, 0, 20, "Очистить буфер обмена")
-        user32.AppendMenuW(m, 0, 30, "ПАНИКА! (Стереть всё и Win+V)")
-        user32.AppendMenuW(m, 0x0800, 0, None)
+        # Формируем список пунктов меню в виде удобных кортежей (ID, Текст, [Значение])
+        # "---" означает разделительную черту (MF_SEPARATOR)
+        items = [
+            (10, "Скрыть консоль в трей" if is_vis else "Открыть консоль GhostClip"),
+            (0, "---"),
+            (20, "Очистить буфер обмена"),
+            (30, "ПАНИКА! (Стереть всё и Win+V)"),
+            (0, "---"),
+        ]
 
-        # Пункты 1-6 с галочками текущего статуса функции
+        # Добавляем пункты [1-6] с текущим статусом активности (True / False)
         for i, (name, val) in config.get_status_dict().items():
-            flags = 0x0008 if val else 0  # 0x0008 = MF_CHECKED (галочка)
-            user32.AppendMenuW(m, flags, 100 + i, f"[{ 'ВКЛ' if val else 'ВЫКЛ' }] {name}")
+            items.append((100 + i, f"[{ 'ВКЛ' if val else 'ВЫКЛ' }] {name}", val))
 
-        user32.AppendMenuW(m, 0x0800, 0, None)
-        user32.AppendMenuW(m, 0, 99, "Выход")
+        items += [(0, "---"), (99, "Выход")]
+
+        # Быстрый цикл добавления всех пунктов в меню Windows вместо повтора AppendMenuW
+        for item in items:
+            if item[1] == "---":
+                user32.AppendMenuW(m, 0x0800, 0, None)  # 0x0800 = MF_SEPARATOR
+            else:
+                # 0x0008 = MF_CHECKED (галочка напротив пункта, если функция включена)
+                flags = 0x0008 if (len(item) > 2 and item[2]) else 0
+                user32.AppendMenuW(m, flags, item[0], item[1])
 
         # Получаем координаты курсора мыши на экране
         pt = wintypes.POINT()
@@ -119,17 +129,14 @@ class TrayManager:
         cmd = user32.TrackPopupMenu(m, 0x0100, pt.x, pt.y, 0, self.hwnd, None)
         user32.DestroyMenu(m)  # Очищаем память меню
 
-        # Выполняем действие в зависимости от выбранного пункта
+        # Словарь действий для быстрого вызова нужной функции по номеру пункта
+        actions = {20: self.on_clear, 30: self.on_panic, 99: self.on_exit}
         if cmd == 10:
             self.toggle_console()
-        elif cmd == 20:
-            self.on_clear()
-        elif cmd == 30:
-            self.on_panic()
+        elif cmd in actions:
+            actions[cmd]()
         elif 101 <= cmd <= 106:
             self.on_toggle(cmd - 100)
-        elif cmd == 99:
-            self.on_exit()
 
     def toggle_console(self):
         """Сворачивает консоль в трей или возвращает её на передний план."""
