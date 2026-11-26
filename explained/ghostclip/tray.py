@@ -19,6 +19,12 @@ kernel32 = ctypes.windll.kernel32
 
 # shell32.dll  — системная оболочка Windows: проводник, панель задач и иконки в трее возле часов
 shell32 = ctypes.windll.shell32
+# Отдельная ссылка с use_last_error=True для безопасного чтения GetLastError после CreateMutexW
+_kernel32_last_error = ctypes.WinDLL("kernel32", use_last_error=True)
+
+ERROR_ALREADY_EXISTS = 183  # Код Windows: мьютекс с таким именем уже создан другим процессом
+SINGLE_INSTANCE_MUTEX_NAME = "Local\\GhostClipShield"
+_single_instance_handle = None
 
 # Коды оконных сообщений Windows (WM = Window Message)
 WM_DESTROY = 0x0002  # Окно закрывается
@@ -91,6 +97,10 @@ kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
 kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 kernel32.GetConsoleWindow.argtypes = []
 kernel32.GetConsoleWindow.restype = wintypes.HWND
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+_kernel32_last_error.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+_kernel32_last_error.CreateMutexW.restype = wintypes.HANDLE
 
 user32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASSW)]
 user32.RegisterClassW.restype = wintypes.ATOM
@@ -404,3 +414,19 @@ class TrayManager:
 
         threading.Thread(target=message_loop, daemon=True).start()
         self._ready_event.wait(timeout=1.0)
+
+
+def acquire_single_instance_lock() -> bool:
+    """Создаёт именованный мьютекс Windows, чтобы не допустить одновременный запуск второй копии."""
+    global _single_instance_handle
+    if _single_instance_handle:
+        return True
+    mutex_handle = _kernel32_last_error.CreateMutexW(None, False, SINGLE_INSTANCE_MUTEX_NAME)
+    if not mutex_handle:
+        return True
+    if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(mutex_handle)
+        return False
+    # Сохраняем дескриптор в глобальной переменной, чтобы мьютекс жил до закрытия программы
+    _single_instance_handle = mutex_handle
+    return True

@@ -26,8 +26,8 @@ def wipe_win_v_history() -> bool:
 
 
 def shred_clipboard(dummy_text: str = OVERWRITE_DUMMY_TEXT) -> bool:
-    """Перезаписывает текущий буфер заглушкой и очищает его."""
-    write_clipboard_text(dummy_text)
+    """Перезаписывает текущий буфер приватной заглушкой (без истории Win+V) и очищает его."""
+    write_clipboard_text(dummy_text, private=True)
     return wipe_clipboard()
 
 

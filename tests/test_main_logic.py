@@ -20,6 +20,7 @@ class TestMainLogic(unittest.TestCase):
             list(config.trusted_apps),
             config._settings_path,
             app_main.tray_manager,
+            app_main._last_error_message,
         )
         config._settings_path = None
         config.clean_urls = True
@@ -31,6 +32,7 @@ class TestMainLogic(unittest.TestCase):
         config.timer_seconds = 45
         config.trusted_apps = []
         app_main.tray_manager = None
+        app_main._last_error_message = ""
 
     def tearDown(self):
         ghost_timer.disarm()
@@ -45,6 +47,7 @@ class TestMainLogic(unittest.TestCase):
             config.trusted_apps,
             config._settings_path,
             app_main.tray_manager,
+            app_main._last_error_message,
         ) = self._saved_state
 
     def test_clean_clipboard_if_needed_respects_toggles(self):
@@ -52,12 +55,70 @@ class TestMainLogic(unittest.TestCase):
         config.clean_urls = False
         config.clean_zero_width = True
 
-        with patch("main.write_clipboard_text") as mock_write, patch("main.add_log"):
+        with (
+            patch("main.clipboard_has_rich_format", return_value=False),
+            patch("main.write_clipboard_text") as mock_write,
+            patch("main.add_log"),
+        ):
             final_text, was_cleaned = app_main.clean_clipboard_if_needed(sample, "chrome.exe")
 
         self.assertTrue(was_cleaned)
         self.assertEqual(final_text, "https://site.com/page?id=1&utm_source=ads")
         mock_write.assert_called_once_with(final_text)
+
+    def test_clean_clipboard_preserves_rich_multiword_text(self):
+        rich_text = "Откройте статью https://site.com/post?utm_source=tg здесь"
+        with (
+            patch("main.clipboard_has_rich_format", return_value=True),
+            patch("main.write_clipboard_text") as mock_write,
+            patch("main.add_log") as mock_log,
+        ):
+            final_text, was_cleaned = app_main.clean_clipboard_if_needed(rich_text, "winword.exe")
+
+        self.assertFalse(was_cleaned)
+        self.assertEqual(final_text, rich_text)
+        mock_write.assert_not_called()
+        self.assertIn("ОЧИСТКА ПРОПУЩЕНА", mock_log.call_args.args[0])
+
+    def test_clean_clipboard_cleans_single_url_even_when_rich_format_present(self):
+        single_url = "https://site.com/post?id=42&utm_source=tg"
+        with (
+            patch("main.clipboard_has_rich_format", return_value=True),
+            patch("main.write_clipboard_text") as mock_write,
+            patch("main.add_log"),
+        ):
+            final_text, was_cleaned = app_main.clean_clipboard_if_needed(single_url, "chrome.exe")
+
+        self.assertTrue(was_cleaned)
+        self.assertEqual(final_text, "https://site.com/post?id=42")
+        mock_write.assert_called_once_with("https://site.com/post?id=42")
+
+    def test_rich_text_skip_still_detects_secret_with_zero_width(self):
+        obfuscated_token = "token sk-\u200babcdefghijklmnopqrstuv1234"
+        with (
+            patch("main.clipboard_has_rich_format", return_value=True),
+            patch("main.write_clipboard_text") as mock_write,
+            patch("main.add_log"),
+            patch("main.render_screen"),
+        ):
+            final_text, was_cleaned = app_main.process_clipboard_event(obfuscated_token, "winword.exe")
+
+        self.assertFalse(was_cleaned)
+        self.assertEqual(final_text, obfuscated_token)
+        mock_write.assert_not_called()
+        self.assertTrue(ghost_timer.is_armed())
+
+    def test_report_error_deduplicates_consecutive_errors(self):
+        with patch("main.add_log") as mock_log:
+            app_main.report_error("монитор", RuntimeError("boom"))
+            app_main.report_error("монитор", RuntimeError("boom"))
+            app_main.report_error("монитор", ValueError("other"))
+
+        self.assertEqual(mock_log.call_count, 2)
+
+    def test_report_error_tolerates_stdout_failure(self):
+        with patch("main.add_log", side_effect=OSError("stdout broken")):
+            app_main.report_error("клавиатура", RuntimeError("io fail"))
 
     def test_handle_clipboard_content_arms_and_disarms_timer(self):
         mock_tray = MagicMock()

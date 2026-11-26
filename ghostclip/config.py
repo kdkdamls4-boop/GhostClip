@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import threading
+import winreg
 
 from .detector import detect_secret, mask_secret
 
@@ -21,7 +22,50 @@ LOG_FILE_PATH = os.path.join(APP_DIR, "clipboard_access.log")
 SETTINGS_FILE_PATH = os.path.join(APP_DIR, "ghostclip_settings.json")
 MIN_TIMER_SECONDS = 5
 MAX_TIMER_SECONDS = 3600
+MAX_LOG_BYTES = 1_048_576
+AUTOSTART_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AUTOSTART_VALUE_NAME = "GhostClipShield"
+AUDIT_STATUS_LABELS = frozenset({"[БУФЕР_ОЧИЩЕН]", "[ПАНИКА]", "[СЕКРЕТ_ЗАТЕРТ]", "[ПРОПУЩЕНО]"})
 _log_lock = threading.Lock()
+
+
+def get_autostart_command() -> str:
+    """Формирует команду запуска GhostClip для реестра автозагрузки Windows."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    main_script_path = os.path.join(APP_DIR, "main.py")
+    return f'"{sys.executable}" "{main_script_path}"'
+
+
+def is_autostart_enabled() -> bool:
+    """Проверяет, прописан ли GhostClip Shield в автозагрузке текущего пользователя."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_REG_PATH, 0, winreg.KEY_READ) as key:
+            value, _ = winreg.QueryValueEx(key, AUTOSTART_VALUE_NAME)
+            return bool(value)
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def set_autostart(enabled: bool) -> bool:
+    """Включает или выключает автозапуск GhostClip в ветке HKCU\\...\\Run."""
+    try:
+        if enabled:
+            with winreg.CreateKeyEx(
+                winreg.HKEY_CURRENT_USER, AUTOSTART_REG_PATH, 0, winreg.KEY_SET_VALUE
+            ) as key:
+                winreg.SetValueEx(key, AUTOSTART_VALUE_NAME, 0, winreg.REG_SZ, get_autostart_command())
+        else:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER, AUTOSTART_REG_PATH, 0, winreg.KEY_SET_VALUE
+                ) as key:
+                    winreg.DeleteValue(key, AUTOSTART_VALUE_NAME)
+            except FileNotFoundError:
+                pass
+        return True
+    except OSError:
+        return False
 
 
 class ShieldConfig:
@@ -200,19 +244,19 @@ config = ShieldConfig(settings_path=SETTINGS_FILE_PATH)
 
 
 def _format_safe_snippet(text: str) -> str:
-    """Маскирует секреты и укорачивает длинные строки перед записью в журнал."""
+    """Маскирует секреты и скрывает содержимое обычного текста, оставляя лишь длину."""
     is_secret, secret_type, _ = detect_secret(text)
     if is_secret:
         return f"{mask_secret(text)} [{secret_type}]"
 
-    single_line = text.strip().replace("\r\n", " ").replace("\n", " ")
-    if len(single_line) > 80:
-        return f"{single_line[:80]}... [всего {len(single_line)} симв.]"
-    return single_line
+    stripped = text.strip()
+    if stripped in AUDIT_STATUS_LABELS:
+        return stripped
+    return f"[текст, {len(text)} симв.]"
 
 
 def log_audit(event_type: str, app_name: str, snippet: str, details: str = "") -> None:
-    """Записывает событие безопасности в файл журнала без утечки открытых секретов."""
+    """Записывает событие безопасности в файл журнала с ротацией без утечки данных."""
     if not config.audit_logging:
         return
 
@@ -223,6 +267,11 @@ def log_audit(event_type: str, app_name: str, snippet: str, details: str = "") -
         log_line += f" ({details})"
 
     with _log_lock:
+        try:
+            if os.path.exists(LOG_FILE_PATH) and os.path.getsize(LOG_FILE_PATH) >= MAX_LOG_BYTES:
+                os.replace(LOG_FILE_PATH, f"{LOG_FILE_PATH}.1")
+        except OSError:
+            pass
         try:
             with open(LOG_FILE_PATH, "a", encoding="utf-8") as log_file:
                 log_file.write(log_line + "\n")

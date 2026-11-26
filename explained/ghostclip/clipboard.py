@@ -5,6 +5,7 @@ explained/ghostclip/clipboard.py
 
 import ctypes  # ctypes — вызов функций из системных библиотек Windows (DLL) напрямую из Python
 import os  # os.path.basename — выделяет только имя файла (chrome.exe) из полного пути
+import struct  # struct.pack — упаковка 32-битного числа DWORD для служебных флагов буфера Windows
 import time  # time.sleep — короткая пауза между повторными попытками доступа к буферу
 from ctypes import wintypes  # Готовые типы данных Windows (HANDLE, HWND, DWORD, BOOL)
 
@@ -17,6 +18,10 @@ kernel32 = ctypes.windll.kernel32
 GMEM_MOVEABLE = 0x0002  # Флаг выделения перемещаемой памяти Windows
 CF_UNICODETEXT = 13  # Формат данных буфера: Юникод-текст UTF-16LE
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000  # Право прочитать только путь к .exe процесса
+# Документированные форматы Microsoft, запрещающие запись заглушки в Win+V и облако
+PRIVATE_FORMAT_NAMES = ("CanIncludeInClipboardHistory", "CanUploadToCloudClipboard")
+# Форматы форматированного текста (браузеры, Word)
+RICH_FORMAT_NAMES = ("HTML Format", "Rich Text Format")
 
 # Описываем 64-битные типы аргументов (argtypes) и результата (restype) для Win32 API.
 # Без этого на 64-битном Windows указатели могут обрезаться до 32 бит!
@@ -30,6 +35,10 @@ user32.GetClipboardData.argtypes = [wintypes.UINT]
 user32.GetClipboardData.restype = wintypes.HANDLE
 user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
 user32.SetClipboardData.restype = wintypes.HANDLE
+user32.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+user32.RegisterClipboardFormatW.restype = wintypes.UINT
+user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
 user32.GetClipboardSequenceNumber.argtypes = []
 user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
 user32.GetClipboardOwner.argtypes = []
@@ -94,8 +103,34 @@ def read_clipboard_text() -> str:
     return _with_clipboard(_read, default="")
 
 
-def write_clipboard_text(text: str) -> bool:
-    """Записывает очищенную или тестовую Юникод-строку в буфер обмена Windows."""
+def _set_dword_format(format_name: str, value: int) -> bool:
+    """Добавляет в открытый буфер служебный DWORD-флаг (например, запрет записи в историю Win+V)."""
+    format_id = user32.RegisterClipboardFormatW(format_name)
+    if not format_id:
+        return False
+    dword_bytes = struct.pack("<I", value)
+    memory_handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(dword_bytes))
+    if not memory_handle:
+        return False
+    memory_pointer = kernel32.GlobalLock(memory_handle)
+    if not memory_pointer:
+        kernel32.GlobalFree(memory_handle)
+        return False
+    try:
+        ctypes.memmove(memory_pointer, dword_bytes, len(dword_bytes))
+    finally:
+        kernel32.GlobalUnlock(memory_handle)
+    if not user32.SetClipboardData(format_id, memory_handle):
+        kernel32.GlobalFree(memory_handle)
+        return False
+    return True
+
+
+def write_clipboard_text(text: str, private: bool = False) -> bool:
+    """
+    Записывает очищенную или служебную Юникод-строку в буфер обмена Windows.
+    Если private=True, помечает запись флагами запрета для истории Win+V и облачной синхронизации.
+    """
     encoded_bytes = (text + "\0").encode("utf-16-le")
 
     def _write() -> bool:
@@ -115,9 +150,20 @@ def write_clipboard_text(text: str) -> bool:
         if not user32.SetClipboardData(CF_UNICODETEXT, memory_handle):
             kernel32.GlobalFree(memory_handle)
             return False
+        if private:
+            for format_name in PRIVATE_FORMAT_NAMES:
+                _set_dword_format(format_name, 0)
         return True
 
     return bool(_with_clipboard(_write, default=False))
+
+
+def clipboard_has_rich_format() -> bool:
+    """Проверяет без открытия буфера, есть ли внутри форматированные данные (HTML или RTF)."""
+    return any(
+        bool(user32.IsClipboardFormatAvailable(user32.RegisterClipboardFormatW(format_name)))
+        for format_name in RICH_FORMAT_NAMES
+    )
 
 
 def wipe_clipboard() -> bool:

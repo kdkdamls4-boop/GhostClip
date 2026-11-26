@@ -1,24 +1,32 @@
 """Точка входа GhostClip Shield: консольный пульт, горячие клавиши и цикл защиты буфера."""
 
+import ctypes
 import datetime
 import msvcrt
 import os
 import sys
 import threading
 import time
+from ctypes import wintypes
 
 from ghostclip import (
     TrayManager,
+    __version__,
+    acquire_single_instance_lock,
+    clipboard_has_rich_format,
     config,
     detect_secret,
     get_active_process_info,
     get_clipboard_sequence_number,
     ghost_timer,
+    is_autostart_enabled,
     log_audit,
     mask_secret,
     panic_wipe,
     read_clipboard_text,
     sanitize_text,
+    set_autostart,
+    strip_zero_width,
     wipe_clipboard,
     wipe_win_v_history,
     write_clipboard_text,
@@ -26,14 +34,58 @@ from ghostclip import (
 
 MAX_LOG_LINES = 25
 NIIF_WARNING = 2
+STD_OUTPUT_HANDLE = -11
+ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
 _ui_lock = threading.Lock()
 _in_settings_mode = threading.Event()
 _log_lines: list[str] = []
+_vt_enabled = False
+_last_error_message = ""
 tray_manager: TrayManager | None = None
 
 
 def _current_time_str() -> str:
     return datetime.datetime.now().strftime("%H:%M:%S")
+
+
+def enable_virtual_terminal() -> bool:
+    """Включает поддержку ANSI-последовательностей в консоли Windows для плавной перерисовки."""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        stdout_handle = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        if not stdout_handle or stdout_handle == wintypes.HANDLE(-1).value:
+            return False
+        console_mode = wintypes.DWORD()
+        if not kernel32.GetConsoleMode(stdout_handle, ctypes.byref(console_mode)):
+            return False
+        if console_mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING:
+            return True
+        return bool(
+            kernel32.SetConsoleMode(stdout_handle, console_mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+        )
+    except Exception:
+        return False
+
+
+def clear_screen() -> None:
+    """Очищает экран без запуска cmd.exe (через ANSI) или откатывается к cls."""
+    if _vt_enabled:
+        print("\x1b[2J\x1b[H", end="", flush=True)
+    else:
+        os.system("cls" if os.name == "nt" else "clear")
+
+
+def report_error(where: str, error: Exception) -> None:
+    """Записывает ошибку в живой лог, подавляя повторы подряд и сбои stdout."""
+    global _last_error_message
+    error_signature = f"{where}:{type(error).__name__}:{error}"
+    if error_signature == _last_error_message:
+        return
+    _last_error_message = error_signature
+    try:
+        add_log(f"[{_current_time_str()}] [ОШИБКА] {where}: {type(error).__name__}: {error}")
+    except Exception:
+        pass
 
 
 def render_screen() -> None:
@@ -53,10 +105,11 @@ def render_screen() -> None:
             else "Ctrl+Shift+X: недоступен"
         )
         trusted_text = f"Белый список: {trusted_count} прил." if trusted_count else "Белый список: пуст"
+        title = f"GhostClip Shield v{__version__} (Консоль + Трей)"
 
-        os.system("cls" if os.name == "nt" else "clear")
+        clear_screen()
         print("╔═══════════════════════════════════════════════════════════════════════╗")
-        print("║                    GhostClip Shield (Консоль + Трей)                  ║")
+        print(f"║{title:^71}║")
         print("╠═══════════════════════════════════════════════════════════════════════╣")
         for option_id in range(1, 7):
             title, enabled = statuses[option_id]
@@ -148,25 +201,28 @@ def handle_auto_destruct() -> None:
 
 
 def handle_settings() -> None:
-    """Открывает интерактивное меню настройки таймера и белого списка приложений."""
+    """Открывает интерактивное меню настройки таймера, белого списка и автозапуска."""
     _in_settings_mode.set()
     try:
         while True:
             trusted = config.get_trusted_apps()
-            os.system("cls" if os.name == "nt" else "clear")
+            autostart_text = "ВКЛ" if is_autostart_enabled() else "ВЫКЛ"
+            clear_screen()
             print("═══════════════════════════════════════════════════════════════════════")
             print("                 НАСТРОЙКИ GHOSTCLIP SHIELD (ghostclip_settings.json)  ")
             print("═══════════════════════════════════════════════════════════════════════")
             print(f"  Текущий таймер самоуничтожения: {config.timer_seconds} сек (диапазон 5..3600)")
             print(f"  Белый список (.exe): {', '.join(trusted) if trusted else '(пусто)'}")
+            print(f"  Автозапуск с Windows: {autostart_text}")
             print("───────────────────────────────────────────────────────────────────────")
             print("  [1] Изменить время таймера (сек)")
             print("  [2] Добавить приложение в белый список (например: keepassxc.exe)")
             print("  [3] Удалить приложение из белого списка")
+            print("  [4] Вкл/Выкл автозапуск с Windows")
             print("  [0] Вернуться на главный экран")
             print("───────────────────────────────────────────────────────────────────────")
 
-            choice = input("Выберите действие [0-3]: ").strip()
+            choice = input("Выберите действие [0-4]: ").strip()
             if choice in ("0", ""):
                 break
             if choice == "1":
@@ -197,6 +253,14 @@ def handle_settings() -> None:
                 else:
                     print("[!] Такого приложения нет в белом списке.")
                     time.sleep(1.2)
+            elif choice == "4":
+                target_state = not is_autostart_enabled()
+                if set_autostart(target_state):
+                    state_label = "ВКЛ" if target_state else "ВЫКЛ"
+                    add_log(f"[{_current_time_str()}] [НАСТРОЙКИ] Автозапуск с Windows: {state_label}.")
+                else:
+                    print("[!] Не удалось изменить автозапуск (реестр недоступен).")
+                    time.sleep(1.5)
     except (EOFError, KeyboardInterrupt):
         pass
     finally:
@@ -205,7 +269,7 @@ def handle_settings() -> None:
 
 
 def clean_clipboard_if_needed(text: str, source_app: str) -> tuple[str, bool]:
-    """Очищает ссылки и невидимые символы, если включены переключатели [1] или [2]."""
+    """Очищает ссылки и невидимые символы, не ломая форматированный текст."""
     if not (config.clean_urls or config.clean_zero_width):
         return text, False
 
@@ -217,6 +281,10 @@ def clean_clipboard_if_needed(text: str, source_app: str) -> tuple[str, bool]:
     if not is_modified:
         return text, False
 
+    if len(text.split()) > 1 and clipboard_has_rich_format():
+        add_log(f"[{_current_time_str()}] [ОЧИСТКА ПРОПУЩЕНА] ({source_app}) форматированный текст сохранён")
+        return text, False
+
     write_clipboard_text(cleaned_text)
     details = "; ".join(cleaning_logs)
     add_log(f"[{_current_time_str()}] [ОЧИСТКА] ({source_app}) -> {details}")
@@ -225,9 +293,10 @@ def clean_clipboard_if_needed(text: str, source_app: str) -> tuple[str, bool]:
 
 
 def handle_clipboard_content(text: str, source_app: str) -> None:
-    """Проверяет текст на секреты, запускает или сбрасывает таймер и ведёт лог."""
+    """Проверяет текст (без невидимых знаков) на секреты, запускает таймер и ведёт лог."""
     if config.detect_secrets:
-        is_secret, secret_type, secret_value = detect_secret(text)
+        normalized_for_detection, _ = strip_zero_width(text)
+        is_secret, secret_type, secret_value = detect_secret(normalized_for_detection)
         if is_secret:
             masked_secret = mask_secret(secret_value)
             add_log(f"[{_current_time_str()}] [СЕКРЕТ!] ({source_app}) {secret_type}: {masked_secret}")
@@ -303,7 +372,8 @@ def key_listener() -> None:
                 render_screen()
             elif pressed_key in ("q", "й", "\x03"):
                 handle_exit()
-        except Exception:
+        except Exception as error:
+            report_error("клавиатура", error)
             time.sleep(0.1)
 
 
@@ -343,15 +413,23 @@ def monitor_clipboard() -> None:
                 last_sequence_number = get_clipboard_sequence_number()
         except KeyboardInterrupt:
             break
-        except Exception:
+        except Exception as error:
+            report_error("монитор буфера", error)
             time.sleep(0.5)
 
 
 def main() -> None:
-    """Инициализирует кодировку, трей, клавиатуру, экран и цикл мониторинга."""
-    global tray_manager
+    """Инициализирует кодировку, блокировку повтора, VT-консоль, трей и цикл мониторинга."""
+    global _vt_enabled, tray_manager
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+
+    if not acquire_single_instance_lock():
+        print("[!] GhostClip Shield уже запущен (ищите иконку в трее).")
+        time.sleep(2)
+        sys.exit(1)
+
+    _vt_enabled = enable_virtual_terminal()
 
     tray_manager = TrayManager(
         on_clear=handle_clear,

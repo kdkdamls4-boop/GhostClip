@@ -8,6 +8,7 @@ import json  # json — чтение и запись настроек в тек�
 import os  # os.path / os.replace — кроссплатформенная работа с путями и атомарная замена файла
 import sys  # sys.frozen — проверка, запущена ли программа как собранный .exe (PyInstaller)
 import threading  # threading.Lock — защита данных при работе нескольких потоков одновременно
+import winreg  # winreg — чтение и запись ключа автозапуска в реестре Windows
 
 from .detector import detect_secret, mask_secret
 
@@ -32,8 +33,56 @@ SETTINGS_FILE_PATH = os.path.join(APP_DIR, "ghostclip_settings.json")
 MIN_TIMER_SECONDS = 5
 MAX_TIMER_SECONDS = 3600
 
+# Максимальный размер журнала аудита перед ротацией в .log.1 (1 МБ)
+MAX_LOG_BYTES = 1_048_576
+
+# Ветка реестра Windows для автозапуска программ текущего пользователя
+AUTOSTART_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AUTOSTART_VALUE_NAME = "GhostClipShield"
+AUDIT_STATUS_LABELS = frozenset({"[БУФЕР_ОЧИЩЕН]", "[ПАНИКА]", "[СЕКРЕТ_ЗАТЕРТ]", "[ПРОПУЩЕНО]"})
+
 # Внутренний замок (мьютекс): два потока не смогут писать в один файл в одну и ту же миллисекунду
 _log_lock = threading.Lock()
+
+
+def get_autostart_command() -> str:
+    """Собирает командную строку запуска GhostClip (для .exe или python main.py) для реестра."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    main_script_path = os.path.join(APP_DIR, "main.py")
+    return f'"{sys.executable}" "{main_script_path}"'
+
+
+def is_autostart_enabled() -> bool:
+    """Проверяет в реестре HKCU\\...\\Run, включён ли автозапуск при старте Windows."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_REG_PATH, 0, winreg.KEY_READ) as key:
+            value, _ = winreg.QueryValueEx(key, AUTOSTART_VALUE_NAME)
+            return bool(value)
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def set_autostart(enabled: bool) -> bool:
+    """Прописывает или удаляет запись автозапуска GhostClip Shield в реестре текущего пользователя."""
+    try:
+        if enabled:
+            # CreateKeyEx создаст раздел Run, если пользователь ещё ни разу не добавлял автозапуск
+            with winreg.CreateKeyEx(
+                winreg.HKEY_CURRENT_USER, AUTOSTART_REG_PATH, 0, winreg.KEY_SET_VALUE
+            ) as key:
+                winreg.SetValueEx(key, AUTOSTART_VALUE_NAME, 0, winreg.REG_SZ, get_autostart_command())
+        else:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER, AUTOSTART_REG_PATH, 0, winreg.KEY_SET_VALUE
+                ) as key:
+                    winreg.DeleteValue(key, AUTOSTART_VALUE_NAME)
+            except FileNotFoundError:
+                pass
+        return True
+    except OSError:
+        return False
 
 
 class ShieldConfig:
@@ -219,20 +268,21 @@ config = ShieldConfig(settings_path=SETTINGS_FILE_PATH)
 def _format_safe_snippet(text: str) -> str:
     """
     Готовит фрагмент текста к записи в журнал:
-    если внутри обнаружен секрет — маскирует его (sk-p•••UV), а длинные строки обрезает до 80 знаков.
+    секрет маскируется (sk-p•••UV), явные системные метки сохраняются,
+    а любой обычный текст (включая текст в скобках) заменяется на [текст, N симв.].
     """
     is_secret, secret_type, _ = detect_secret(text)
     if is_secret:
         return f"{mask_secret(text)} [{secret_type}]"
 
-    single_line = text.strip().replace("\r\n", " ").replace("\n", " ")
-    if len(single_line) > 80:
-        return f"{single_line[:80]}... [всего {len(single_line)} симв.]"
-    return single_line
+    stripped = text.strip()
+    if stripped in AUDIT_STATUS_LABELS:
+        return stripped
+    return f"[текст, {len(text)} симв.]"
 
 
 def log_audit(event_type: str, app_name: str, snippet: str, details: str = "") -> None:
-    """Потокобезопасно дописывает защищённую строку события в clipboard_access.log."""
+    """Потокобезопасно дописывает защищённую строку в clipboard_access.log с ротацией по размеру."""
     if not config.audit_logging:
         return
 
@@ -243,6 +293,12 @@ def log_audit(event_type: str, app_name: str, snippet: str, details: str = "") -
         log_line += f" ({details})"
 
     with _log_lock:
+        # При достижении 1 МБ переносим текущий журнал в .log.1, чтобы диск не переполнялся
+        try:
+            if os.path.exists(LOG_FILE_PATH) and os.path.getsize(LOG_FILE_PATH) >= MAX_LOG_BYTES:
+                os.replace(LOG_FILE_PATH, f"{LOG_FILE_PATH}.1")
+        except OSError:
+            pass
         try:
             with open(LOG_FILE_PATH, "a", encoding="utf-8") as log_file:
                 log_file.write(log_line + "\n")

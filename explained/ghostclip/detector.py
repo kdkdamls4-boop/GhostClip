@@ -17,6 +17,13 @@ PATTERNS = [
     ("GITHUB_TOKEN", re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{36,}\b")),
     ("GITHUB_PAT", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{50,}\b")),
     ("GOOGLE_API_KEY", re.compile(r"\bAIza[0-9A-Za-z_-]{32,}\b")),
+    ("SLACK_TOKEN", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}\b")),
+    ("STRIPE_KEY", re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}\b")),
+    ("GITLAB_PAT", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b")),
+    ("NPM_TOKEN", re.compile(r"\bnpm_[A-Za-z0-9]{36}\b")),
+    ("HUGGINGFACE_TOKEN", re.compile(r"\bhf_[A-Za-z0-9]{30,}\b")),
+    ("SENDGRID_KEY", re.compile(r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b")),
+    ("AZURE_STORAGE_KEY", re.compile(r"AccountKey=[A-Za-z0-9+/=]{40,}")),
     ("TELEGRAM_BOT_TOKEN", re.compile(r"\b\d{8,12}:AA[A-Za-z0-9_-]{30,}\b")),
     # Классический JWT состоит из трёх base64url-блоков (header.payload.signature)
     ("JWT_TOKEN", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")),
@@ -45,6 +52,30 @@ def calculate_entropy(text: str) -> float:
         return 0.0
     length = len(text)
     return -sum((count / length) * math.log2(count / length) for count in Counter(text).values())
+
+
+def has_known_card_prefix(digits: str) -> bool:
+    """
+    Проверяет префикс (IIN/BIN) платёжной системы: Visa, Mastercard, Мир,
+    American Express, UnionPay, JCB, Discover или Maestro. Отсекает случайные длинные номера заказов.
+    """
+    length = len(digits)
+    if length < 13 or not digits.isdigit():
+        return False
+    two = int(digits[:2])
+    three = int(digits[:3])
+    four = int(digits[:4])
+    return (
+        (digits[0] == "4" and length in (13, 16, 19))  # Visa
+        or (51 <= two <= 55 and length == 16)  # Mastercard
+        or (2221 <= four <= 2720 and length == 16)  # Mastercard (2-серия)
+        or (2200 <= four <= 2204 and 16 <= length <= 19)  # Мир
+        or (two in (34, 37) and length == 15)  # American Express
+        or (two == 62 and 16 <= length <= 19)  # UnionPay
+        or (3528 <= four <= 3589 and 16 <= length <= 19)  # JCB
+        or ((four == 6011 or two == 65 or 644 <= three <= 649) and 16 <= length <= 19)  # Discover
+        or (two in (50, 56, 57, 58, 63, 67) and 12 <= length <= 19)  # Maestro
+    )
 
 
 def luhn_check(card_number: str) -> bool:
@@ -93,7 +124,7 @@ def detect_secret(text: str) -> tuple[bool, str, str]:
 
     for match in CARD_PATTERN.finditer(text):
         digits_only = re.sub(r"\D", "", match.group(0))
-        if luhn_check(digits_only):
+        if has_known_card_prefix(digits_only) and luhn_check(digits_only):
             return True, "CREDIT_CARD", match.group(0)
 
     words = text.strip().split()

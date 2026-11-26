@@ -33,3 +33,29 @@ jobs:
       - name: Run unit tests (explained twin)
         run: |
           python -c "import sys, unittest; sys.path.insert(0, 'explained'); suite = unittest.defaultTestLoader.discover('tests', pattern='test_*.py'); result = unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if result.wasSuccessful() else 1)"
+
+  build-exe:
+    needs: lint-and-test
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Build GhostClip.exe
+        run: pyinstaller --clean --noconfirm ghostclip.spec
+
+      - name: Upload GhostClip-exe artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: GhostClip-exe
+          path: dist/GhostClip.exe
+          if-no-files-found: error

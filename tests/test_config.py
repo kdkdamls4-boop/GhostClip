@@ -1,8 +1,15 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 
-from ghostclip.config import ShieldConfig
+from ghostclip.config import (
+    AUTOSTART_VALUE_NAME,
+    ShieldConfig,
+    get_autostart_command,
+    is_autostart_enabled,
+    set_autostart,
+)
 
 
 class TestConfig(unittest.TestCase):
@@ -92,6 +99,36 @@ class TestConfig(unittest.TestCase):
             fallback = ShieldConfig(settings_path=settings_path)
             self.assertEqual(fallback.timer_seconds, 45)
             self.assertTrue(fallback.clean_urls)
+
+    def test_autostart_registry_helpers(self):
+        command = get_autostart_command()
+        self.assertIn("main.py", command)
+
+        mock_winreg = MagicMock()
+        mock_winreg.HKEY_CURRENT_USER = object()
+        mock_winreg.KEY_READ = 1
+        mock_winreg.KEY_SET_VALUE = 2
+        mock_winreg.REG_SZ = 1
+        mock_key = mock_winreg.CreateKeyEx.return_value.__enter__.return_value
+        mock_delete_key = mock_winreg.OpenKey.return_value.__enter__.return_value
+        mock_winreg.QueryValueEx.return_value = (command, 1)
+
+        with patch("ghostclip.config.winreg", mock_winreg):
+            self.assertTrue(is_autostart_enabled())
+            self.assertTrue(set_autostart(True))
+            mock_winreg.CreateKeyEx.assert_called_once()
+            mock_winreg.SetValueEx.assert_called_once_with(
+                mock_key, AUTOSTART_VALUE_NAME, 0, mock_winreg.REG_SZ, command
+            )
+
+            self.assertTrue(set_autostart(False))
+            mock_winreg.DeleteValue.assert_called_once_with(mock_delete_key, AUTOSTART_VALUE_NAME)
+
+            mock_winreg.QueryValueEx.side_effect = FileNotFoundError()
+            self.assertFalse(is_autostart_enabled())
+
+            mock_winreg.OpenKey.side_effect = FileNotFoundError()
+            self.assertTrue(set_autostart(False))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 import ctypes
 import os
+import struct
 import time
 from ctypes import wintypes
 
@@ -11,6 +12,8 @@ kernel32 = ctypes.windll.kernel32
 GMEM_MOVEABLE = 0x0002
 CF_UNICODETEXT = 13
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+PRIVATE_FORMAT_NAMES = ("CanIncludeInClipboardHistory", "CanUploadToCloudClipboard")
+RICH_FORMAT_NAMES = ("HTML Format", "Rich Text Format")
 
 # Настраиваем 64-битные типы аргументов и возвращаемых значений для стабильности на x64 Windows
 user32.OpenClipboard.argtypes = [wintypes.HWND]
@@ -23,6 +26,10 @@ user32.GetClipboardData.argtypes = [wintypes.UINT]
 user32.GetClipboardData.restype = wintypes.HANDLE
 user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
 user32.SetClipboardData.restype = wintypes.HANDLE
+user32.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+user32.RegisterClipboardFormatW.restype = wintypes.UINT
+user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
 user32.GetClipboardSequenceNumber.argtypes = []
 user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
 user32.GetClipboardOwner.argtypes = []
@@ -83,8 +90,31 @@ def read_clipboard_text() -> str:
     return _with_clipboard(_read, default="")
 
 
-def write_clipboard_text(text: str) -> bool:
-    """Записывает Юникод-текст (UTF-16LE) в буфер обмена Windows."""
+def _set_dword_format(format_name: str, value: int) -> bool:
+    """Записывает служебный DWORD-флаг (например, запрет истории Win+V) в открытый буфер."""
+    format_id = user32.RegisterClipboardFormatW(format_name)
+    if not format_id:
+        return False
+    dword_bytes = struct.pack("<I", value)
+    memory_handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(dword_bytes))
+    if not memory_handle:
+        return False
+    memory_pointer = kernel32.GlobalLock(memory_handle)
+    if not memory_pointer:
+        kernel32.GlobalFree(memory_handle)
+        return False
+    try:
+        ctypes.memmove(memory_pointer, dword_bytes, len(dword_bytes))
+    finally:
+        kernel32.GlobalUnlock(memory_handle)
+    if not user32.SetClipboardData(format_id, memory_handle):
+        kernel32.GlobalFree(memory_handle)
+        return False
+    return True
+
+
+def write_clipboard_text(text: str, private: bool = False) -> bool:
+    """Записывает Юникод-текст (UTF-16LE) в буфер; при private=True скрывает от Win+V и облака."""
     encoded_bytes = (text + "\0").encode("utf-16-le")
 
     def _write() -> bool:
@@ -103,9 +133,20 @@ def write_clipboard_text(text: str) -> bool:
         if not user32.SetClipboardData(CF_UNICODETEXT, memory_handle):
             kernel32.GlobalFree(memory_handle)
             return False
+        if private:
+            for format_name in PRIVATE_FORMAT_NAMES:
+                _set_dword_format(format_name, 0)
         return True
 
     return bool(_with_clipboard(_write, default=False))
+
+
+def clipboard_has_rich_format() -> bool:
+    """Проверяет, есть ли в буфере форматированный текст (HTML или RTF)."""
+    return any(
+        bool(user32.IsClipboardFormatAvailable(user32.RegisterClipboardFormatW(format_name)))
+        for format_name in RICH_FORMAT_NAMES
+    )
 
 
 def wipe_clipboard() -> bool:

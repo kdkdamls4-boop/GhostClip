@@ -3,6 +3,7 @@ import unittest
 from ghostclip.detector import (
     calculate_entropy,
     detect_secret,
+    has_known_card_prefix,
     luhn_check,
     mask_secret,
 )
@@ -65,6 +66,40 @@ class TestDetector(unittest.TestCase):
 
         redis_url = "redis://:PassOnlySecret99@127.0.0.1:6379/0"
         self.assertEqual(detect_secret(redis_url)[:2], (True, "DB_CONNECTION_STRING"))
+
+    def test_detect_expanded_service_tokens(self):
+        samples = [
+            ("SLACK_TOKEN", "xox" + "b-1234567890-abcdefghij"),
+            ("STRIPE_KEY", "sk_" + "live_" + "AbCd1234EfGh5678IjKlMnOp"),
+            ("GITLAB_PAT", "glpat" + "-abcDef123456_7890GhIjKl"),
+            ("NPM_TOKEN", "npm_" + ("a1B2c3" * 6)),
+            ("HUGGINGFACE_TOKEN", "hf_" + ("xY9zAb" * 5)),
+            (
+                "SENDGRID_KEY",
+                "SG"
+                + "."
+                + ("AbCdEf1234567890GhIjKl")
+                + "."
+                + ("MnOpQr1234567890StUvWxYz_" * 1)
+                + "AbCdEfGhIjKlMnOpQr",
+            ),
+            ("AZURE_STORAGE_KEY", "Account" + "Key=" + ("AbCdEfGhIj1234567890" * 2) + "=="),
+        ]
+        for expected_type, token_sample in samples:
+            with self.subTest(secret_type=expected_type):
+                self.assertEqual(detect_secret(token_sample)[:2], (True, expected_type))
+
+    def test_card_prefix_filter_rejects_random_luhn_numbers(self):
+        non_card_luhn = "9000000000000001"
+        self.assertTrue(luhn_check(non_card_luhn))
+        self.assertFalse(has_known_card_prefix(non_card_luhn))
+        self.assertFalse(has_known_card_prefix("1234"))
+        self.assertFalse(has_known_card_prefix("4532abc123456789"))
+        self.assertFalse(detect_secret(non_card_luhn)[0])
+
+        for known_card in ("4532015112830366", "5425233430109903", "2202201234567895", "341234567890123"):
+            with self.subTest(card=known_card[:4]):
+                self.assertTrue(has_known_card_prefix(known_card))
 
     def test_detect_aws_and_private_key(self):
         aws_key = "AKIAIOSFODNN7EXAMPLE"
