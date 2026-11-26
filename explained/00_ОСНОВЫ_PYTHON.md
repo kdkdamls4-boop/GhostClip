@@ -72,11 +72,11 @@ print(f"{'abc':<10}|")                  # → abc       |  (:<10 = выровн�
 ## 5. Срезы строк и списков `[ : ]`
 
 ```python
-s = "sk-proj-abcdef"
-s[:4]     # → "sk-p"   первые 4 символа
-s[-2:]    # → "ef"     последние 2
-s[::-1]   # → задом наперёд
-lines[-25:]  # последние 25 элементов списка
+token = "sk-proj-abcdef"
+token[:4]     # → "sk-p"   первые 4 символа
+token[-2:]    # → "ef"     последние 2
+token[::-1]   # → задом наперёд
+lines[-25:]   # последние 25 элементов списка
 ```
 
 ---
@@ -127,7 +127,7 @@ while True:                   # бесконечный цикл
     break                     # выйти из цикла
 ```
 
-**`enumerate`** — дает и номер, и элемент: `for i, d in enumerate([7, 8])` → `(0, 7), (1, 8)`.
+**`enumerate`** — дает и номер, и элемент: `for index, digit in enumerate([7, 8])` → `(0, 7), (1, 8)`.
 
 ---
 
@@ -147,26 +147,26 @@ def add_log(msg: str) -> None:
 
 **Значения по умолчанию:**
 ```python
-def read_clipboard_text(retries: int = 5): ...
-read_clipboard_text()      # retries будет 5
-read_clipboard_text(10)    # retries будет 10
+def _with_clipboard(action, default=None, retries: int = 5): ...
+_with_clipboard(read_fn)              # retries будет 5
+_with_clipboard(read_fn, retries=10)  # retries будет 10
 ```
 
-**Именованные аргументы:** `log_audit(event="X", process="Y")` — указываем, какой параметр чему равен.
+**Именованные аргументы:** `log_audit(event_type="X", app_name="Y", snippet="Z")` — указываем, какой параметр чему равен.
 
 **Возврат нескольких значений** (на самом деле возвращается кортеж):
 ```python
-def f():
+def strip_sample():
     return "текст", 3
-cleaned, count = f()   # распаковка: cleaned="текст", count=3
+cleaned, count = strip_sample()   # распаковка: cleaned="текст", count=3
 ```
 
 **lambda** — функция без имени, в одну строку:
 ```python
-lambda m: add_log(m)
+lambda message: add_log(message)
 # то же самое, что:
-def _без_имени(m):
-    return add_log(m)
+def _без_имени(message):
+    return add_log(message)
 ```
 
 **Функцию можно передать как значение** (без скобок!):
@@ -205,23 +205,23 @@ ghost_timer.is_armed()            # вызвали его метод → False
 ## 10. Импорты — подключение кода из других файлов
 
 ```python
-import time                          # подключить весь модуль time
-from typing import Optional          # взять из модуля только Optional
-from .clipboard import wipe_clipboard  # точка = "из соседнего файла в этой же папке"
+import time                                        # подключить весь модуль time
+from typing import Callable                        # взять из модуля только Callable
+from .clipboard import wipe_clipboard, write_clipboard_text  # точка = "из соседнего файла в этой же папке"
 ```
 
 **Модуль** = один `.py` файл. **Пакет** = папка с модулями (и обычно `__init__.py`).
 
 ---
 
-## 11. Подсказки типов из `typing`
+## 11. Подсказки типов (Python 3.10+ и `typing`)
 
 | Запись | Значит |
 |---|---|
-| `Optional[str]` | строка **или** `None` |
-| `Tuple[str, int]` | кортеж из строки и числа |
-| `List[str]` / `list[str]` | список строк |
-| `Callable[[int], None]` | функция, которая принимает int и ничего не возвращает |
+| `str \| None` | строка **или** `None` |
+| `tuple[str, int]` | кортеж из строки и числа |
+| `list[str]` / `dict[int, str]` | список строк / словарь `int → str` |
+| `Callable[[int], None]` | функция, которая принимает `int` и ничего не возвращает |
 
 Ещё раз: на работу программы они **не влияют**. Это документация.
 
@@ -245,8 +245,8 @@ finally:
 ## 13. `with` — «открыл → гарантированно закрыл»
 
 ```python
-with open("file.log", "a") as f:   # открыть файл
-    f.write("текст")
+with open("file.log", "a") as log_file:   # открыть файл
+    log_file.write("текст")
 # здесь файл уже автоматически закрыт, даже если внутри была ошибка
 
 with _log_lock:                    # захватить замок (см. потоки)
@@ -262,7 +262,7 @@ GhostClip одновременно: следит за буфером, ждёт �
 Для этого каждое дело работает в своём **потоке**.
 
 ```python
-threading.Thread(target=run_key_listener, daemon=True).start()
+threading.Thread(target=key_listener, daemon=True).start()
 # target   = какую функцию запустить в отдельном потоке
 # daemon   = поток умрёт сам, когда закроется основная программа
 # .start() = поехали
@@ -282,9 +282,9 @@ with _lock:
 ## 15. Генераторы списков (компактные циклы)
 
 ```python
-digits = [int(c) for c in "12a3" if c.isdigit()]
+digits = [int(char) for char in "12a3" if char.isdigit()]
 # → [1, 2, 3]
-# читается: "для каждого c в строке, если c — цифра, возьми int(c)"
+# читается: "для каждого char в строке, если char — цифра, возьми int(char)"
 ```
 
 `sum(x for x in ...)`, `any(...)` (хоть один True?), `all(...)` (все True?) — работают так же.

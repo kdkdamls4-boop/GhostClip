@@ -1,31 +1,25 @@
-"""
-GhostClip — Модульный персональный защитник буфера обмена для Windows.
-"""
+"""GhostClip Shield — компактный модульный защитник буфера обмена Windows."""
 
+from .cleaner import clean_url, sanitize_text, strip_zero_width
 from .clipboard import (
-    read_clipboard_text,
-    write_clipboard_text,
-    wipe_clipboard,
-    get_clipboard_sequence_number,
     get_active_process_info,
+    get_clipboard_sequence_number,
+    read_clipboard_text,
+    wipe_clipboard,
+    write_clipboard_text,
 )
-from .shredder import wipe_win_v_history, panic_wipe, shred_clipboard
-from .cleaner import strip_zero_width, clean_url, sanitize_text
-from .detector import detect_secret, mask_secret, luhn_check, calculate_entropy
-from .audit import log_audit, LOG_FILE_PATH
-from .timer import ghost_timer, GhostTimer
-from .config import config, ShieldConfig
+from .config import LOG_FILE_PATH, SETTINGS_FILE_PATH, ShieldConfig, config, get_app_dir, log_audit
+from .detector import calculate_entropy, detect_secret, luhn_check, mask_secret
+from .shredder import GhostTimer, ghost_timer, panic_wipe, shred_clipboard, wipe_win_v_history
 from .tray import TrayManager
 
 __all__ = [
-    "read_clipboard_text",
-    "write_clipboard_text",
-    "wipe_clipboard",
-    "get_clipboard_sequence_number",
-    "get_active_process_info",
-    "wipe_win_v_history",
-    "panic_wipe",
-    "shred_clipboard",
+    "LOG_FILE_PATH",
+    "SETTINGS_FILE_PATH",
+    "get_app_dir",
+    "ShieldConfig",
+    "config",
+    "log_audit",
     "strip_zero_width",
     "clean_url",
     "sanitize_text",
@@ -33,11 +27,15 @@ __all__ = [
     "mask_secret",
     "luhn_check",
     "calculate_entropy",
-    "log_audit",
-    "LOG_FILE_PATH",
-    "ghost_timer",
+    "read_clipboard_text",
+    "write_clipboard_text",
+    "wipe_clipboard",
+    "get_clipboard_sequence_number",
+    "get_active_process_info",
+    "shred_clipboard",
+    "panic_wipe",
+    "wipe_win_v_history",
     "GhostTimer",
-    "config",
-    "ShieldConfig",
+    "ghost_timer",
     "TrayManager",
 ]

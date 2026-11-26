@@ -4,8 +4,8 @@
 Использование: python run_tests.py
 """
 
-import sys
 import os
+import sys
 import unittest
 
 # Добавляем корневой каталог проекта в sys.path

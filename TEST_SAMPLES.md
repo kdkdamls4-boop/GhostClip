@@ -98,6 +98,15 @@ b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 -----END OPENSSH PRIVATE KEY-----
 ```
 
+**Anthropic / Google Gemini / Telegram / JWT / БД-строка:**
+```text
+sk-ant-api03-abcdef1234567890abcdef1234567890
+AIzaSyD-TestKey_1234567890abcdefghijklmnop
+123456789:AAH0xYzAbCdEfGhIjKlMnOpQrStUvWxYz123
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+postgresql://admin:SuperSecret123@db.example.internal:5432/prod
+```
+
 ---
 
 ## 5. 🔐 Тест детектора сложных паролей по энтропии Шеннона (Функции `[3]` и `[4]`)

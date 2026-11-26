@@ -4,31 +4,26 @@
 а также сразу отправлять их в буфер обмена по нажатию клавиши [1-8]!
 """
 
-import sys
-import os
 import random
 import string
-
-sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sys
 
 from ghostclip.clipboard import write_clipboard_text
 
 
 def generate_luhn_card(prefix: str = "4532") -> str:
     """Генерирует случайный 16-значный номер банковской карты, проходящий проверку Луна."""
-    digits = [int(x) for x in prefix]
+    digits = [int(digit_char) for digit_char in prefix]
     while len(digits) < 15:
         digits.append(random.randint(0, 9))
 
-    # Вычисляем контрольную 16-ю цифру по алгоритму Луна
     checksum = 0
-    for i, d in enumerate(digits[::-1]):
-        if i % 2 == 0:
-            doubled = d * 2
+    for index, digit in enumerate(digits[::-1]):
+        if index % 2 == 0:
+            doubled = digit * 2
             checksum += doubled - 9 if doubled > 9 else doubled
         else:
-            checksum += d
+            checksum += digit
     check_digit = (10 - (checksum % 10)) % 10
     digits.append(check_digit)
 
@@ -64,16 +59,19 @@ def generate_strong_password() -> str:
 
 def generate_dirty_url() -> str:
     vid = "".join(random.choices(string.ascii_letters + string.digits, k=11))
-    si = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-    fb = "".join(random.choices(string.ascii_letters + string.digits, k=20))
-    return f"https://www.youtube.com/watch?v={vid}&si={si}&utm_source=telegram&utm_medium=cpc&fbclid={fb}"
+    si_param = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+    fb_param = "".join(random.choices(string.ascii_letters + string.digits, k=20))
+    return f"https://www.youtube.com/watch?v={vid}&si={si_param}&utm_source=telegram&utm_medium=cpc&fbclid={fb_param}"
 
 
 def generate_zero_width_text() -> str:
-    return "Секретный\u200Bдокумент\u200Cкомпании\uFEFFсо_скрытыми\u200Dсимволами_слежки"
+    return "Секретный\u200bдокумент\u200cкомпании\ufeffсо_скрытыми\u200dсимволами_слежки"
 
 
-def main():
+def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     print("=" * 72)
     print("   🧪 ГЕНЕРАТОР ТЕСТОВЫХ ПРИМЕРОВ ДЛЯ ПРОВЕРКИ GHOSTCLIP SHIELD")
     print("=" * 72)
@@ -100,7 +98,7 @@ def main():
 
             if choice == "q":
                 break
-            elif choice == "p":
+            if choice == "p":
                 print("\n--- СВЕЖИЕ СГЕНЕРИРОВАННЫЕ ПРИМЕРЫ ---")
                 print(f"1. Грязная ссылка : {generate_dirty_url()}")
                 print(f"2. Карта Visa     : {generate_luhn_card('4532')}")
@@ -111,43 +109,31 @@ def main():
                 print(f"7. Сложный пароль : {generate_strong_password()}")
                 continue
 
-            sample = None
-            label = ""
-
-            if choice == "1":
-                sample = generate_dirty_url()
-                label = "Грязная ссылка с трекерами"
-            elif choice == "2":
-                sample = generate_zero_width_text()
-                label = "Текст с 4 невидимыми Zero-Width символами"
-            elif choice == "3":
-                prefix = random.choice(["4532", "5425", "2202"])
-                sample = generate_luhn_card(prefix)
-                label = "Валидная банковская карта (проходит тест Луна)"
-            elif choice == "4":
-                sample = generate_openai_key()
-                label = "OpenAI API Key"
-            elif choice == "5":
-                sample = generate_github_token()
-                label = "GitHub Personal Token"
-            elif choice == "6":
-                sample = generate_aws_key()
-                label = "AWS Access Key ID"
-            elif choice == "7":
-                sample = generate_strong_password()
-                label = "Высокоэнтропийный пароль"
-            elif choice == "8":
-                sample = "Привет! Это обычный безопасный текст без секретов и ссылок."
-                label = "Обычный безопасный текст"
-            else:
+            samples = {
+                "1": (generate_dirty_url(), "Грязная ссылка с трекерами"),
+                "2": (generate_zero_width_text(), "Текст с 4 невидимыми Zero-Width символами"),
+                "3": (
+                    generate_luhn_card(random.choice(["4532", "5425", "2202"])),
+                    "Валидная банковская карта (проходит тест Луна)",
+                ),
+                "4": (generate_openai_key(), "OpenAI API Key"),
+                "5": (generate_github_token(), "GitHub Personal Token"),
+                "6": (generate_aws_key(), "AWS Access Key ID"),
+                "7": (generate_strong_password(), "Высокоэнтропийный пароль"),
+                "8": (
+                    "Привет! Это обычный безопасный текст без секретов и ссылок.",
+                    "Обычный безопасный текст",
+                ),
+            }
+            if choice not in samples:
                 print("[!] Введите цифру от 1 до 8, 'p' или 'q'.")
                 continue
 
+            sample, label = samples[choice]
             if write_clipboard_text(sample):
                 print(f"✅ Скопировано в буфер [{label}]:\n   {sample}")
             else:
                 print("❌ Не удалось записать в буфер обмена.")
-
         except (KeyboardInterrupt, EOFError):
             break
 

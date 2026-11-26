@@ -1,123 +1,127 @@
-"""Модуль очистки ссылок в тексте и удаления невидимых символов (CleanClip)."""
+"""
+explained/ghostclip/cleaner.py
+Модуль чистки URL от трекинг-меток (utm_*, fbclid, si) и удаления невидимых знаков Zero-Width.
+"""
 
-import re
-# re — регулярные выражения (поиск по шаблону).
+import re  # re — поиск ссылок внутри обычного текста по шаблону
 
-from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
-# Встроенные инструменты для разбора ссылок:
-#   urlparse   — разбирает ссылку на части (схема, сайт, путь, параметры...)
-#   parse_qsl  — разбирает параметры "a=1&b=2" в список [("a","1"), ("b","2")]
-#   urlencode  — собирает обратно: [("a","1")] → "a=1"
-#   urlunparse — собирает ссылку из частей обратно в строку
+# urllib.parse — стандартный парсер интернет-адресов на составные части:
+# схема (https), домен (youtube.com), путь (/watch), параметры (?v=123&utm_source=tg)
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from typing import Tuple, List
+# Невидимые символы Юникода (Zero-Width), которыми иногда метят скопированный текст для слежки
+ZERO_WIDTH_CHARS = "\u200b\u200c\u200d\ufeff\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2060"
 
+# Таблица перевода str.maketrans("", "", ...): мгновенно удаляет перечисленные символы на скорости Си
+ZERO_WIDTH_TABLE = str.maketrans("", "", ZERO_WIDTH_CHARS)
 
-# ═══════════════════════════════════════════════════════════════════
-#  НЕВИДИМЫЕ СИМВОЛЫ
-# ═══════════════════════════════════════════════════════════════════
-
-ZERO_WIDTH_CHARS = "\u200B\u200C\u200D\uFEFF\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2060"
-# \u200B и т.д. — коды символов Unicode, у которых НЕТ ширины, то есть их не видно.
-# Ими иногда «метят» текст, чтобы отследить, кто его скопировал,
-# или ломают пароли и ссылки.
-
-ZW_TABLE = str.maketrans("", "", ZERO_WIDTH_CHARS)
-# maketrans создаёт «таблицу замен». Третий аргумент = «эти символы удалить».
-# Потом text.translate(ZW_TABLE) удалит их все за один проход, очень быстро.
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  ТРЕКИНГ-МЕТКИ В ССЫЛКАХ
-# ═══════════════════════════════════════════════════════════════════
-
+# Известные рекламные и трекинговые параметры (utm_* и hsa_* дополнительно проверяются по префиксу)
 TRACKING_PARAMS = {
-    # Фигурные скобки без двоеточий — это SET (множество).
-    # Поиск `x in set` в нём очень быстрый.
-    # Это параметры, по которым сайты следят, откуда ты пришёл.
-    # Пример: youtube.com/watch?v=abc&si=XYZ  ← si — это слежка.
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
-    "fbclid", "gclid", "si", "ref", "ref_src", "igshid", "yclid", "mc_cid", "mc_eid",
-    "_openstat", "dclid", "msclkid",
+    "_openstat",
+    "dclid",
+    "fbclid",
+    "gad_campaignid",
+    "gad_source",
+    "gbraid",
+    "gclid",
+    "igsh",
+    "igshid",
+    "li_fat_id",
+    "mc_cid",
+    "mc_eid",
+    "mkt_tok",
+    "msclkid",
+    "oly_anon_id",
+    "oly_enc_id",
+    "rb_clickid",
+    "ref",
+    "ref_src",
+    "scm",
+    "si",
+    "spm",
+    "ttclid",
+    "twclid",
+    "vero_id",
+    "wbraid",
+    "wickedid",
+    "yclid",
+    "ysclid",
 }
+TRACKING_PREFIXES = ("utm_", "hsa_")
 
-URL_REGEX = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
-# Шаблон ссылки: "http", затем необязательная "s" (s?), затем "://",
-# затем всё подряд, кроме пробела и символов < > " '.
-# re.IGNORECASE — не важно, большие буквы или маленькие.
-
-
-def strip_zero_width(text: str) -> Tuple[str, int]:
-    """Удаляет невидимые символы на скорости C через str.translate."""
-    cleaned = text.translate(ZW_TABLE)
-    return cleaned, len(text) - len(cleaned)
-    # Возвращаем ДВА значения: очищенный текст и число удалённых символов
-    # (длина «до» минус длина «после»).
+# Регулярное выражение ищет любые http:// или https:// ссылки внутри текста
+URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
 
-def clean_url(url_str: str) -> Tuple[str, List[str]]:
-    """Вырезает трекинг-метки из URL, сохраняя полезные параметры."""
+def strip_zero_width(text: str) -> tuple[str, int]:
+    """Удаляет все невидимые символы из строки и возвращает (чистый_текст, количество_удалённых)."""
+    cleaned_text = text.translate(ZERO_WIDTH_TABLE)
+    return cleaned_text, len(text) - len(cleaned_text)
+
+
+def clean_url(url: str) -> tuple[str, list[str]]:
+    """Вырезает трекинговые параметры из одной ссылки, оставляя полезные параметры на месте."""
     try:
-        # try — «попробуй». Если внутри что-то сломается, перейдём в except.
+        # Разбиваем адрес на компоненты (схема, домен, путь, строка параметров query и т.д.)
+        parsed_url = urlparse(url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            return url, []
 
-        u = urlparse(url_str)
-        # u.scheme = "https", u.netloc = "youtube.com", u.query = "v=abc&si=XYZ"
+        kept_params = []  # Сюда складываем нужные параметры (например, v=12345 или page=1)
+        removed_params = []  # Сюда запоминаем имена вырезанных трекеров для лога
 
-        if not u.scheme or not u.netloc:
-            # or — хотя бы одно условие истинно.
-            # Если нет схемы или сайта, это не ссылка. Возвращаем как было.
-            return url_str, []
-
-        clean_q, removed = [], []
-        # Создаём сразу ДВА пустых списка:
-        # clean_q — параметры, которые оставим; removed — имена удалённых.
-
-        for k, v in parse_qsl(u.query, keep_blank_values=True):
-            # k — имя параметра ("si"), v — значение ("XYZ").
-            if k.lower() in TRACKING_PARAMS or k.lower().startswith("utm_"):
-                # .lower() — в нижний регистр. .startswith("utm_") — начинается ли с "utm_".
-                removed.append(k)
-                # .append() — добавить в конец списка.
+        # parse_qsl разбирает query-строку в список пар (ключ, значение), сохраняя их порядок
+        for param_name, param_value in parse_qsl(parsed_url.query, keep_blank_values=True):
+            lower_name = param_name.lower()
+            if lower_name in TRACKING_PARAMS or lower_name.startswith(TRACKING_PREFIXES):
+                removed_params.append(param_name)
             else:
-                clean_q.append((k, v))
-                # Двойные скобки: добавляем один кортеж (k, v).
+                kept_params.append((param_name, param_value))
 
-        if not removed:
-            # Ничего не удалили, поэтому возвращаем исходную ссылку без изменений.
-            return url_str, []
+        if not removed_params:
+            return url, []
 
-        return urlunparse(u._replace(query=urlencode(clean_q))), removed
-        # u._replace(query=...) — копия ссылки с заменёнными параметрами.
-        # urlunparse — собираем её обратно в строку.
+        # Собираем URL обратно уже без рекламного мусора
+        cleaned_url = urlunparse(parsed_url._replace(query=urlencode(kept_params)))
+        return cleaned_url, removed_params
     except Exception:
-        # Exception — любая ошибка. Если что-то сломалось, просто отдаём ссылку как была.
-        return url_str, []
+        return url, []
 
 
-def sanitize_text(text: str, clean_urls_enabled: bool = True, clean_zw_enabled: bool = True) -> Tuple[str, List[str], int]:
-    # Параметры с = True — значения по умолчанию. Если их не передать, будут True.
-    """Очищает невидимые символы и любые ссылки (даже внутри длинного текста)."""
+def _split_trailing_punctuation(raw_token: str) -> tuple[str, str]:
+    """Отделяет точку, запятую или лишнюю закрывающую скобку в конце ссылки в тексте."""
+    url_part = raw_token.rstrip(".,;:!?")
+    trailing = raw_token[len(url_part) :]
+    while url_part.endswith(")") and url_part.count(")") > url_part.count("("):
+        url_part = url_part[:-1]
+        trailing = ")" + trailing
+    return url_part, trailing
 
-    cleaned, zw_count = strip_zero_width(text) if clean_zw_enabled else (text, 0)
-    # Тернарный оператор: если включено — чистим, иначе (text, 0) «как есть, удалено 0».
 
-    removed_all: List[str] = []
-    # Сюда будем собирать ВСЕ удалённые метки со всех ссылок в тексте.
+def sanitize_text(
+    text: str,
+    clean_urls_enabled: bool = True,
+    clean_zw_enabled: bool = True,
+) -> tuple[str, bool, list[str]]:
+    """Выполняет полную чистку скопированного текста с учётом переключателей [1] и [2]."""
+    cleaned_text, removed_zw_count = strip_zero_width(text) if clean_zw_enabled else (text, 0)
+    cleaning_logs = [f"Удалено {removed_zw_count} скрытых знаков"] if removed_zw_count else []
+    is_modified = removed_zw_count > 0
 
-    if clean_urls_enabled and "http" in cleaned.lower():
-        # Быстрая проверка: если в тексте вообще нет "http", ссылки не ищем.
+    if clean_urls_enabled and "http" in cleaned_text.lower():
+        removed_url_params: list[str] = []
 
-        def _repl(match):
-            # Функция ВНУТРИ функции. Её вызовет URL_REGEX.sub для каждой найденной ссылки.
-            # match.group(0) — текст найденной ссылки.
-            url, rem = clean_url(match.group(0))
-            removed_all.extend(rem)
-            # .extend() — добавить в список ВСЕ элементы другого списка.
-            return url
-            # То, что вернём, встанет в текст на место старой ссылки.
+        def replace_url(match: re.Match[str]) -> str:
+            url_part, trailing = _split_trailing_punctuation(match.group(0))
+            cleaned_url, removed_params = clean_url(url_part)
+            removed_url_params.extend(removed_params)
+            return cleaned_url + trailing
 
-        cleaned = URL_REGEX.sub(_repl, cleaned)
-        # .sub(функция, текст) — найти все ссылки и заменить каждую результатом _repl.
+        cleaned_text = URL_PATTERN.sub(replace_url, cleaned_text)
+        if removed_url_params:
+            # Убираем дубликаты названий параметров, сохраняя порядок их появления
+            unique_params = list(dict.fromkeys(removed_url_params))
+            cleaning_logs.append(f"Очищен URL ({', '.join(unique_params)})")
+            is_modified = True
 
-    return cleaned, removed_all, zw_count
-    # Возвращаем ТРИ значения: текст, список удалённых меток, число невидимых символов.
+    return cleaned_text, is_modified, cleaning_logs

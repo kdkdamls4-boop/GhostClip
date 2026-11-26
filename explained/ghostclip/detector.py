@@ -1,151 +1,113 @@
-"""Модуль обнаружения секретов: API-ключи, карты (алгоритм Луна) и пароли (энтропия Шеннона)."""
+"""
+explained/ghostclip/detector.py
+Модуль детекции секретов: API-ключи, JWT, строки БД, приватные ключи, карты (Луна) и пароли.
+"""
 
-import re
-# re — регулярные выражения: шаблоны для поиска текста (см. раздел 19 в основах).
+import math  # math.log2 — логарифм по основанию 2 для формулы энтропии Шеннона
+import re  # re — поиск токенов и цифр карты по регулярным выражениям
+from collections import Counter  # Counter — быстрый подсчёт частоты каждого символа в строке
 
-import math
-# math — математика. Нужен math.log2 (логарифм по основанию 2) для энтропии.
-
-from collections import Counter
-# Counter — считает, сколько раз встречается каждый символ.
-# Counter("aab") → {'a': 2, 'b': 1}
-
-from typing import Optional, Tuple
-# Подсказки типов: Optional[X] = «X или None», Tuple = кортеж.
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  ШАБЛОНЫ ИЗВЕСТНЫХ СЕКРЕТОВ
-# ═══════════════════════════════════════════════════════════════════
-
+# Регулярные выражения для известных форматов ключей и токенов.
+# Важно: более узкий шаблон (sk-ant-...) стоит ПЕРЕД общим (sk-...), чтобы Anthropic не путался с OpenAI!
 PATTERNS = [
-    # Список кортежей. Каждый кортеж: (шаблон, категория, описание).
-    # re.compile(...) заранее «компилирует» шаблон, чтобы потом искать быстрее.
-    # r"..." — сырая строка, в ней обратный слэш \ не превращается в спецсимвол.
-
-    (re.compile(r"sk-[a-zA-Z0-9_\-]{20,}"), "API_KEY", "OpenAI API Key"),
-    # «sk-», затем минимум 20 символов из: букв, цифр, _ или -
-
-    (re.compile(r"ghp_[a-zA-Z0-9]{36}"), "TOKEN", "GitHub Personal Token"),
-    # «ghp_», затем ровно 36 букв или цифр
-
-    (re.compile(r"github_pat_[a-zA-Z0-9_]{50,}"), "TOKEN", "GitHub Fine-Grained Token"),
-
-    (re.compile(r"AKIA[0-9A-Z]{16}"), "API_KEY", "AWS Access Key ID"),
-    # «AKIA» + 16 заглавных букв или цифр
-
-    (re.compile(r"-----BEGIN (RSA|EC|DSA|OPENSSH|PGP)?\s?PRIVATE KEY-----"), "PRIVATE_KEY", "Приватный ключ (SSH/TLS)"),
-    # (RSA|EC|...) — одно из слов на выбор, ? — необязательно, \s — пробел
+    ("ANTHROPIC_KEY", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}\b")),
+    ("OPENAI_KEY", re.compile(r"\bsk-[a-zA-Z0-9_-]{20,}")),
+    ("AWS_KEY", re.compile(r"\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b")),
+    # Токены GitHub начинаются с префикса ghp_, gho_, ghu_, ghs_ или ghr_
+    ("GITHUB_TOKEN", re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{36,}\b")),
+    ("GITHUB_PAT", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{50,}\b")),
+    ("GOOGLE_API_KEY", re.compile(r"\bAIza[0-9A-Za-z_-]{32,}\b")),
+    ("TELEGRAM_BOT_TOKEN", re.compile(r"\b\d{8,12}:AA[A-Za-z0-9_-]{30,}\b")),
+    # Классический JWT состоит из трёх base64url-блоков (header.payload.signature)
+    ("JWT_TOKEN", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")),
+    # Строка подключения к БД с паролем внутри: postgres://user:password@host/db
+    (
+        "DB_CONNECTION_STRING",
+        re.compile(
+            r"\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqp)://[^:\s/]*:[^@\s]+@[^\s\"'<>]+",
+            re.IGNORECASE,
+        ),
+    ),
+    # Заголовки приватных SSH, TLS и PGP ключей
+    ("PRIVATE_KEY", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----")),
 ]
 
+# Ищем от 13 до 19 цифр, между которыми могут стоять пробелы или дефисы
 CARD_PATTERN = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
-# Ищет от 13 до 19 цифр подряд, между ними могут быть пробелы или дефисы.
-# Пример: "4111 1111 1111 1111". \b — граница слова.
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  АЛГОРИТМ ЛУНА — проверка, что номер карты настоящий
-# ═══════════════════════════════════════════════════════════════════
+def calculate_entropy(text: str) -> float:
+    """
+    Вычисляет энтропию Шеннона для строки.
+    У обычных слов она обычно 2.0–3.0 бита на символ, у случайных паролей — от 3.6 и выше.
+    """
+    if not text:
+        return 0.0
+    length = len(text)
+    return -sum((count / length) * math.log2(count / length) for count in Counter(text).values())
+
 
 def luhn_check(card_number: str) -> bool:
-    """Алгоритм Луна для проверки настоящих номеров банковских карт (отсеивает случайные цифры)."""
-    # У любой настоящей банковской карты последняя цифра — «контрольная».
-    # Алгоритм Луна проверяет её. Так программа отличает номер карты
-    # от просто длинного числа (например, номера заказа).
-
-    digits = [int(c) for c in card_number if c.isdigit()]
-    # Генератор списка: «для каждого символа c в строке, если это цифра,
-    # преврати его в число int(c)». "4111-11" → [4, 1, 1, 1, 1, 1]
-
+    """
+    Проверяет номер банковской карты по официальному алгоритму Луна.
+    Помогает отличать реальные номера карт от случайных длинных чисел.
+    """
+    digits = [int(char) for char in card_number if char.isdigit()]
     if not (13 <= len(digits) <= 19):
-        # len() — длина. 13 <= x <= 19 — «x между 13 и 19».
         return False
 
-    total = sum(d * 2 - 9 if (i % 2 == 1 and d * 2 > 9) else (d * 2 if i % 2 == 1 else d) for i, d in enumerate(digits[::-1]))
-    # Самая страшная строка. Разбираем по частям:
-    #   digits[::-1]   — переворачиваем список (идём с конца).
-    #   enumerate(...) — даёт пары (номер i, цифра d).
-    #   i % 2 == 1     — % это остаток от деления. Условие = «каждая вторая цифра».
-    #   Для каждой второй цифры: удваиваем; если вышло больше 9 — вычитаем 9.
-    #   Остальные цифры берём как есть.
-    #   sum(...)       — складываем всё.
-
-    return total % 10 == 0
-    # Карта настоящая, если сумма делится на 10 без остатка.
+    checksum = 0
+    for index, digit in enumerate(digits[::-1]):
+        if index % 2 == 1:
+            doubled = digit * 2
+            checksum += doubled - 9 if doubled > 9 else doubled
+        else:
+            checksum += digit
+    return checksum % 10 == 0
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  ЭНТРОПИЯ — насколько текст «случайный»
-# ═══════════════════════════════════════════════════════════════════
-
-def calculate_entropy(s: str) -> float:
-    """Быстрый расчет энтропии Шеннона через C-оптимизированный Counter."""
-    # Энтропия — мера хаоса. «aaaaaaa» → 0 (никакого хаоса).
-    # «xK9#mQ2!» → высокая (похоже на пароль).
-
-    if not s:
-        # Пустая строка считается «ложью», поэтому not s = «строка пустая».
-        return 0.0
-
-    n = len(s)
-    return -sum((count / n) * math.log2(count / n) for count in Counter(s).values())
-    # Формула Шеннона: -Σ p·log2(p), где p = доля каждого символа.
-    # Counter(s).values() — сколько раз встретился каждый символ.
-    # Запоминать формулу не нужно, достаточно понимать: чем больше число, тем «случайнее» текст.
+def _looks_like_strong_password(word: str) -> bool:
+    """Проверяет, похоже ли одиночное слово на надёжный случайный пароль (отсекая любые URL)."""
+    if len(word) < 12 or "://" in word:
+        return False
+    char_classes = sum(
+        [
+            any(char.isdigit() for char in word),
+            any(char.isupper() for char in word),
+            any(char.islower() for char in word),
+            any(not char.isalnum() for char in word),
+        ]
+    )
+    return char_classes >= 3 and calculate_entropy(word) >= 3.6
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  ГЛАВНАЯ ФУНКЦИЯ: ЭТО СЕКРЕТ?
-# ═══════════════════════════════════════════════════════════════════
+def detect_secret(text: str) -> tuple[bool, str, str]:
+    """
+    Ищет секрет в тексте по порядку: известные ключи -> карты -> случайные пароли.
+    Возвращает кортеж (найден_ли_секрет, тип_секрета, найденная_строка).
+    """
+    for secret_type, pattern in PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return True, secret_type, match.group(0)
 
-def detect_secret(text: str) -> Optional[Tuple[str, str]]:
-    # -> Optional[Tuple[str, str]] — вернёт либо пару строк, либо None.
-    """Возвращает (категория, описание) при обнаружении секрета или None."""
+    for match in CARD_PATTERN.finditer(text):
+        digits_only = re.sub(r"\D", "", match.group(0))
+        if luhn_check(digits_only):
+            return True, "CREDIT_CARD", match.group(0)
 
-    s = text.strip()
-    # .strip() — убирает пробелы и переносы строк по краям.
+    words = text.strip().split()
+    if len(words) == 1 and _looks_like_strong_password(words[0]):
+        return True, "HIGH_ENTROPY_PASSWORD", words[0]
 
-    # --- Проверка 1: известные форматы ключей ---
-    for pattern, cat, desc in PATTERNS:
-        # Распаковка: каждый кортеж из PATTERNS раскладываем на 3 переменные.
-        if pattern.search(s):
-            # .search() — найти шаблон где угодно в тексте.
-            return cat, desc
-            # Нашли, значит сразу возвращаем результат. Дальше функция не идёт.
-
-    # --- Проверка 2: банковские карты ---
-    for match in CARD_PATTERN.findall(s):
-        # .findall() — найти ВСЕ совпадения и вернуть их списком.
-        digits = "".join(filter(str.isdigit, match))
-        # filter(str.isdigit, ...) — оставить только цифры.
-        # "".join(...) — склеить их в одну строку без разделителя.
-        if luhn_check(digits):
-            return "CREDIT_CARD", f"Банковская карта ({len(digits)} цифр)"
-
-    # --- Проверка 3: похоже на сложный пароль? ---
-    if " " not in s and "\n" not in s and len(s) >= 16:
-        # Нет пробелов, нет переносов строки, длина 16+.
-        # and — все условия должны быть истинны.
-
-        variety = sum([any(c.isdigit() for c in s), any(c.isupper() for c in s), any(c.islower() for c in s), any(not c.isalnum() for c in s)])
-        # «Разнообразие»: сколько типов символов есть в тексте (от 0 до 4):
-        #   any(...) — True, если ХОТЯ БЫ ОДИН символ подходит.
-        #   есть цифры? есть ЗАГЛАВНЫЕ? есть строчные? есть спецсимволы (!@#)?
-        #   sum([True, False, True, True]) = 3  (True считается как 1).
-
-        ent = calculate_entropy(s)
-        if variety >= 3 and ent >= 3.75:
-            return "PASSWORD", f"Сложный пароль (энтропия {ent:.2f} бит)"
-            # {ent:.2f} — вывести число с 2 знаками после запятой.
-
-    return None
-    # Ни одна проверка не сработала, значит это обычный текст.
+    return False, "", ""
 
 
-def mask_secret(text: str) -> str:
-    """Безопасная маскировка секрета для экрана и логов: 'sk-p•••ef'."""
-    s = text.strip()
-    return "••••••" if len(s) <= 6 else f"{s[:4]}•••{s[-2:]}"
-    # Тернарный оператор: A if условие else B.
-    # Короткий текст (6 символов и меньше) — прячем целиком.
-    # Иначе: первые 4 символа s[:4] + точки + последние 2 символа s[-2:].
+def mask_secret(secret: str) -> str:
+    """Прячет середину секрета символами •••, чтобы безопасно показать его пользователю или в логе."""
+    stripped = secret.strip()
+    if len(stripped) <= 6:
+        return "••••••"
+    if len(stripped) <= 8:
+        return f"{stripped[:2]}•••{stripped[-2:]}"
+    return f"{stripped[:4]}•••{stripped[-2:]}"
