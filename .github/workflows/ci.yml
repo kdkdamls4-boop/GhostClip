@@ -53,9 +53,18 @@ jobs:
       - name: Build GhostClip.exe
         run: pyinstaller --clean --noconfirm ghostclip.spec
 
+      - name: Generate SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Path dist/GhostClip.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  GhostClip.exe" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
+          Get-Content dist/SHA256SUMS.txt
+
       - name: Upload GhostClip-exe artifact
         uses: actions/upload-artifact@v7
         with:
           name: GhostClip-exe
-          path: dist/GhostClip.exe
+          path: |
+            dist/GhostClip.exe
+            dist/SHA256SUMS.txt
           if-no-files-found: error

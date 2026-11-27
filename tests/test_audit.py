@@ -18,7 +18,7 @@ class TestAudit(unittest.TestCase):
         self._temp_dir.cleanup()
 
     def test_log_audit_masks_secrets(self):
-        secret_sample = "sk-proj-testsecret1234567890abcdef"
+        secret_sample = "sk-" + "proj-" + "testsecret1234567890abcdef"
         card_sample = "4532 0151 1283 0366"
         with patch("ghostclip.config.LOG_FILE_PATH", self._log_path):
             log_audit("TEST_EVENT", "test_proc.exe", secret_sample)

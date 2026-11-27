@@ -12,3 +12,8 @@ dist/
 .env
 .env.*
 ghostclip_settings.json
+DEFENSE_QA.md
+*.pem
+*.key
+*.db
+*.sqlite

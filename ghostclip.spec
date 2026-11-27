@@ -23,6 +23,7 @@ exe = EXE(
     a.datas,
     [],
     name="GhostClip",
+    icon="assets/ghostclip.ico",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

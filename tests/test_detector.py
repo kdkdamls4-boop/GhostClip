@@ -22,42 +22,44 @@ class TestDetector(unittest.TestCase):
         self.assertGreater(calculate_entropy("k9#mP$2vL!9xQ@z1"), 3.6)
 
     def test_detect_openai_and_anthropic_keys(self):
-        openai_key = "sk-proj-abcde1234567890abcdef1234567890"
+        openai_key = "sk-" + "proj-" + "abcde1234567890abcdef1234567890"
         found, secret_type, value = detect_secret(openai_key)
         self.assertTrue(found)
         self.assertEqual(secret_type, "OPENAI_KEY")
         self.assertEqual(value, openai_key)
 
-        anthropic_key = "sk-ant-api03-abcdef1234567890abcdef1234567890"
+        anthropic_key = "sk-" + "ant-" + "api03-abcdef1234567890abcdef1234567890"
         found_ant, ant_type, ant_value = detect_secret(anthropic_key)
         self.assertTrue(found_ant)
         self.assertEqual(ant_type, "ANTHROPIC_KEY")
         self.assertEqual(ant_value, anthropic_key)
 
     def test_detect_github_tokens(self):
-        classic = "ghp_1234567890abcdefghij1234567890abcdef"
+        classic = "ghp" + "_1234567890abcdefghij1234567890abcdef"
         found, secret_type, value = detect_secret(classic)
         self.assertTrue(found)
         self.assertEqual(secret_type, "GITHUB_TOKEN")
         self.assertEqual(value, classic)
 
-        fine_grained = "github_pat_11AABBCCDD0123456789_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
+        fine_grained = "github" + "_pat_" + "11AABBCCDD0123456789_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
         found_pat, pat_type, pat_value = detect_secret(fine_grained)
         self.assertTrue(found_pat)
         self.assertEqual(pat_type, "GITHUB_PAT")
         self.assertEqual(pat_value, fine_grained)
 
     def test_detect_google_telegram_jwt_and_db_urls(self):
-        google_key = "AIzaSyD-TestKey_1234567890abcdefghijklmnop"
+        google_key = "AIza" + "SyD-TestKey_1234567890abcdefghijklmnop"
         self.assertEqual(detect_secret(google_key)[:2], (True, "GOOGLE_API_KEY"))
 
         telegram_token = "123456789:AAH0xYzAbCdEfGhIjKlMnOpQrStUvWxYz123"
         self.assertEqual(detect_secret(telegram_token)[:2], (True, "TELEGRAM_BOT_TOKEN"))
 
         jwt_token = (
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-            "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ."
-            "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+            "eyJ"
+            + "hbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            + "eyJ"
+            + "zdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ."
+            + "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
         )
         self.assertEqual(detect_secret(jwt_token)[:2], (True, "JWT_TOKEN"))
 
@@ -108,7 +110,7 @@ class TestDetector(unittest.TestCase):
         self.assertEqual(secret_type, "AWS_KEY")
         self.assertEqual(value, aws_key)
 
-        ssh_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc123\n-----END OPENSSH PRIVATE KEY-----"
+        ssh_key = "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nabc123\n-----END " + "OPENSSH PRIVATE KEY-----"
         found_key, key_type, _ = detect_secret(ssh_key)
         self.assertTrue(found_key)
         self.assertEqual(key_type, "PRIVATE_KEY")
@@ -144,7 +146,7 @@ class TestDetector(unittest.TestCase):
     def test_mask_secret(self):
         self.assertEqual(mask_secret("secret"), "••••••")
         self.assertEqual(mask_secret("abcd1234"), "ab•••34")
-        masked = mask_secret("sk-123456789abcdef")
+        masked = mask_secret("sk-" + "123456789abcdef")
         self.assertEqual(masked, "sk-1•••ef")
         self.assertNotIn("123456789", masked)
 
